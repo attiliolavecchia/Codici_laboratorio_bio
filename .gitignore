@@ -1,0 +1,19 @@
+# Ignore everything in the repo by default
+/*
+
+# But keep this .gitignore file
+!.gitignore
+
+# Keep the Confocale folder itself so we can selectively include files inside it
+!/Confocale/
+
+# Inside Confocale, ignore everything by default
+/Confocale/*
+
+# Allow only these Python files in Confocale
+!/Confocale/tamsd_plot.py
+!/Confocale/data_reader.py
+!/Confocale/msd_analyzer.py
+!/Confocale/eamsd_plot.py
+!/Confocale/guide.md
+

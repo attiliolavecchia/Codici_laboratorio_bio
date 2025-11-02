@@ -1,0 +1,83 @@
+"""
+Plot eaMSD (initial-displacement only) on linear axes and save to file.
+
+Requirements implemented:
+  - Read trajectories, compute eaMSD with no time-averaging (msd_analyzer).
+  - Plot MSD vs time (seconds) on linear scale for both axes.
+  - Labels:
+      X: "Time Lag (τ) [seconds]"
+      Y: "Ensemble-Averaged MSD (⟨r²⟩) [Length Units²]"
+  - Title: "Ensemble-Averaged MSD (Initial Displacement)"
+  - Save figure to eamsd_initial_plot.png
+
+Dependencies: matplotlib
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+
+from data_reader import read_trajectories_from_csv
+from msd_analyzer import calculate_ensemble_msd
+
+
+def plot_linear_and_save(tau, msd, output_path: Path) -> None:
+    plt.figure(figsize=(7.5, 5.0))
+    plt.plot(tau, msd, marker="o", linestyle="-", color="C0", label="eaMSD")
+    plt.ylabel("EA-MSD")
+    plt.xlabel(r"Time Lag ($\tau$) [seconds]")
+    plt.grid(True, linestyle=":", alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+essential_description = (
+    "Compute ensemble-averaged MSD (initial displacement only) and save a linear-scale plot."
+)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=essential_description)
+    parser.add_argument("csv", type=str, help="Path to the trajectories CSV (e.g., sferette240nm_spots.csv)")
+    parser.add_argument(
+        "--max-lag-fraction",
+        type=float,
+        default=None,
+        help=(
+            "Fraction (0<f<=1] of the longest track to cap the maximum lag; if omitted, use full range (N_max-1)."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="eamsd_plot.png",
+        help="Output image filename (default: eamsd_initial_plot.png)",
+    )
+    args = parser.parse_args()
+
+    trajectories = read_trajectories_from_csv(args.csv)
+    result = calculate_ensemble_msd(trajectories, max_lag_fraction=args.max_lag_fraction)
+
+    if result.tau.size == 0:
+        print("No data to plot (empty or insufficient points).")
+        return
+
+    # Print requested metadata
+    print(f"Δt (global): {result.dt}")
+    tau_max = result.tau[-1] if result.tau.size else float('nan')
+    print(f"n_max (steps): {result.n_max}  |  τ_max (seconds): {tau_max}")
+    print(f"Total trajectories (M): {result.total_trajectories}")
+    print(f"Longest trajectory length (points): {result.longest_trajectory_points}")
+
+    output_path = Path(args.output)
+    plot_linear_and_save(result.tau, result.msd, output_path)
+    print(f"Saved plot to: {output_path.resolve()}")
+
+
+if __name__ == "__main__":
+    main()
