@@ -16,4 +16,7 @@
 !/Confocale/msd_analyzer.py
 !/Confocale/eamsd_plot.py
 !/Confocale/guide.md
+!/Confocale/compare_msd.py
+!/Confocale/plot_msd_fit.py
+!/Confocale/msd_fitting.py
 
