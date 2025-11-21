@@ -66,7 +66,7 @@ def main() -> None:
         "--output",
         type=str,
         default=None,
-        help="Output image filename (default: tamsd_plot_<track>.png)",
+        help="Output image filename (default: tamsd_plot_<track>.svg)",
     )
     args = parser.parse_args()
 
@@ -100,14 +100,22 @@ def main() -> None:
 
     # Print metadata
     print(f"Track ID: {selected_id}")
-    print(f"Δt (track/global used): {result.dt}")
+    print(f"dt (track/global used): {result.dt}")
     tau_max = result.tau[-1] if result.tau.size else float('nan')
-    print(f"n_max (steps): {result.n_max}  |  τ_max (seconds): {tau_max}")
+    print(f"n_max (steps): {result.n_max}  |  tau_max (seconds): {tau_max}")
     print(f"Trajectory length (points): {result.longest_trajectory_points}")
 
-    # Resolve output filename
-    output_filename = args.output or f"tamsd_plot_{str(selected_id).replace(' ', '_')}.png"
-    output_path = Path(output_filename)
+    # Resolve output path
+    if args.output:
+        output_path = Path(args.output)
+        # Ensure parent directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Create default output directory if it doesn't exist
+        output_dir = Path("tamsd_plots")
+        output_dir.mkdir(exist_ok=True)
+        output_filename = f"tamsd_plot_{str(selected_id).replace(' ', '_')}.svg"
+        output_path = output_dir / output_filename
 
     plot_linear_and_save(result.tau, result.msd, output_path)
     print(f"Saved plot to: {output_path.resolve()}")

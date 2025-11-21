@@ -19,4 +19,6 @@
 !/Confocale/compare_msd.py
 !/Confocale/plot_msd_fit.py
 !/Confocale/msd_fitting.py
-
+!/Confocale/msd_fitting_nonlinear.py
+!/Confocale/msd_fitting_anomalous.py
+!/Confocale/msd_fitting_anomalous_drift.py

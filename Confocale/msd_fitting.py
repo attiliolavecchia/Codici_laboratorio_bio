@@ -4,7 +4,7 @@ Linear MSD fitting module for extracting Diffusion Coefficient (D).
 This module implements a robust fitting function to extract the Diffusion Coefficient
 from Mean Squared Displacement (MSD) data using the linear model:
     
-    MSD(τ) = 2D·τ
+    MSD(τ) = 4D·τ
     
 where:
     - MSD is the Mean Squared Displacement
@@ -55,7 +55,7 @@ class FitResult:
 
 
 def linear_msd_model(tau: np.ndarray, D: float) -> np.ndarray:
-    """Linear MSD model: MSD(τ) = 2D·τ
+    """Linear MSD model: MSD(τ) = 4D·τ (for 2D motion)
     
     Args:
         tau: Time lag values (seconds or appropriate time units)
@@ -64,7 +64,7 @@ def linear_msd_model(tau: np.ndarray, D: float) -> np.ndarray:
     Returns:
         MSD values predicted by the model
     """
-    return 2.0 * D * tau
+    return 4.0 * D * tau
 
 
 def calculate_r_squared(y_observed: np.ndarray, y_predicted: np.ndarray) -> float:
@@ -100,9 +100,9 @@ def fit_msd_linear(
     dt: float,
     fit_fraction: float = 0.10,
     D_initial: float = 1e-2,
-    D_bounds: Tuple[float, float] = (9e-4, 1.5e-1),
+    D_bounds: Tuple[float, float] = (1e-6, 10.0),
 ) -> FitResult:
-    """Fit MSD data to linear model MSD(τ) = 2D·τ using Levenberg-Marquardt algorithm.
+    """Fit MSD data to linear model MSD(τ) = 4D·τ using Levenberg-Marquardt algorithm.
     
     This function performs a partial fit on the first portion of the MSD data,
     corresponding to the short-time linear diffusion regime. From theory, the
@@ -117,8 +117,7 @@ def fit_msd_linear(
         - Lower actual glycerol concentration
         - Higher temperature
         - Active transport or convective flows
-        The default bounds [9e-4, 1.5e-1] accommodate both theoretical expectations
-        and experimental observations with appropriate safety margins.
+        The default bounds [1e-6, 10.0] are wide to accommodate various experimental conditions.
     
     Algorithm:
         Uses scipy.optimize.curve_fit which automatically selects:
@@ -132,7 +131,7 @@ def fit_msd_linear(
         dt: Time step (seconds)
         fit_fraction: Fraction of n_max to use for fitting (default: 0.10 = 10%)
         D_initial: Initial guess for the Diffusion Coefficient (default: 1e-2 μm²/s)
-        D_bounds: Tuple (lower, upper) bounds for D (default: (9e-4, 1.5e-1) μm²/s)
+        D_bounds: Tuple (lower, upper) bounds for D (default: (1e-6, 10.0) μm²/s)
     
     Returns:
         FitResult containing:

@@ -10,9 +10,9 @@ Behavior:
 
 Headers are normalized by data_reader (TrackMate‑style POSITION_X/Y/T and TRACK_ID supported).
 
-Outputs:
-    - eamsd_plots/compare_eamsd_<timesteps>_f<frac>_<timestamp>.png  (four minimal time steps)
-    - tamsd_plots/compare_tamsd_ts<file_timestep>_track<ID>_L<lengths>_f<frac>_<timestamp>.png  (single trajectory, four lengths)
+Output:
+    - eamsd_plots/compare_eamsd_<timesteps>_f<frac>_<timestamp>.svg  (four minimal time steps)
+    - tamsd_plots/compare_tamsd_ts<file_timestep>_track<ID>_L<lengths>_f<frac>_<timestamp>.svg  (single trajectory, four lengths)
 
 Notes:
     - Lag extent can be limited via a max lag fraction prompt (0 < f ≤ 1).
@@ -417,11 +417,11 @@ def main(argv: List[str]) -> int:
     e_dir.mkdir(parents=True, exist_ok=True)
     t_dir.mkdir(parents=True, exist_ok=True)
 
-    out_e = e_dir / f"compare_eamsd_ts{ts_selected}_f{f_str}_{ts_now}.png"
+    out_e = e_dir / f"compare_eamsd_ts{ts_selected}_f{f_str}_{ts_now}.svg"
 
     ta_ts = ta_file.timestep_min
     L_str = "-".join(map(str, lengths))
-    out_t = t_dir / f"compare_tamsd_ts{ta_ts}_track{longest_id}_L{L_str}_f{f_str}_{ts_now}.png"
+    out_t = t_dir / f"compare_tamsd_ts{ta_ts}_track{longest_id}_L{L_str}_f{f_str}_{ts_now}.svg"
     plot_overlaid_eamsd(curves, out_e)
     plot_overlaid_tamsd(t_curves, out_t)
     print("\nSaved plots:")
