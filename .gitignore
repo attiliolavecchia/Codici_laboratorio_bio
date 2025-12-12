@@ -4,11 +4,13 @@
 # But keep this .gitignore file
 !.gitignore
 
-# Keep the Confocale folder itself so we can selectively include files inside it
+# Keep the Confocale and the 2_Fotoni folders so we can selectively include files inside them
 !/Confocale/
+!/2_Fotoni/
 
-# Inside Confocale, ignore everything by default
+# Inside Confocale and 2_Fotoni, ignore everything by default
 /Confocale/*
+/2_Fotoni/*
 
 # Allow only these Python files in Confocale
 !/Confocale/tamsd_plot.py
@@ -33,3 +35,8 @@
 !Confocale/Docu/MSD_FITTING.md
 !Confocale/Docu/SCRIPTS_REFERENCE.md
 !Confocale/Docu/GETTING_STARTED_BEGINNERS.md
+
+!/2_Fotoni/flim_data_reader.py
+!/2_Fotoni/flim_exponential_fit.py
+!/2_Fotoni/plot_power_intensity.py
+!/2_Fotoni/run_all_flim.sh
