@@ -48,6 +48,8 @@ class MSDResult:
     Attributes:
         tau: 1D array of lag times τ = n Δt in the same units as the input Time.
         msd: 1D array of MSD values (ensemble averaged) corresponding to ``tau``.
+        msd_std: 1D array of sample standard deviation of r² values per lag (ddof=1).
+        msd_sem: 1D array of standard error of the mean (SEM = msd_std / sqrt(M(n))) per lag.
         tracks_per_lag: Number of trajectories contributing to each lag.
         dt: Global Δt used to convert steps to lag times.
         n_max: Maximum lag in steps used in the calculation.
@@ -57,6 +59,8 @@ class MSDResult:
 
     tau: np.ndarray
     msd: np.ndarray
+    msd_std: np.ndarray
+    msd_sem: np.ndarray
     tracks_per_lag: np.ndarray
     dt: float
     n_max: int
@@ -162,11 +166,15 @@ def calculate_ensemble_msd(
         values = calculate_initial_displacement_msd_per_track(track, maximum_lag_steps)
         per_track_values.append(values)
 
-    msd_values, tracks_per_lag = average_across_trajectories(per_track_values)
+    msd_values, msd_std, tracks_per_lag = average_across_trajectories(per_track_values)
+    with np.errstate(invalid='ignore'):
+        msd_sem = msd_std / np.sqrt(tracks_per_lag.astype(float))
 
     return MSDResult(
         tau=tau,
         msd=msd_values,
+        msd_std=msd_std,
+        msd_sem=msd_sem,
         tracks_per_lag=tracks_per_lag,
         dt=float(global_dt),
         n_max=int(maximum_lag_steps),
@@ -230,6 +238,8 @@ def calculate_time_averaged_msd_per_track(
     y = np.asarray(track.y, dtype=float)
 
     tamsd = np.full(K, np.nan, dtype=float)
+    tamsd_std = np.full(K, np.nan, dtype=float)
+    tamsd_sem = np.full(K, np.nan, dtype=float)
     # For each lag n, average over all windows i where i+n < N
     for n in range(1, K + 1):
         dx = x[n:] - x[:-n]
@@ -237,12 +247,18 @@ def calculate_time_averaged_msd_per_track(
         vals = dx * dx + dy * dy
         # N - n windows; protected mean
         tamsd[n - 1] = float(np.mean(vals)) if vals.size else float("nan")
+        if vals.size >= 2:
+            std = float(np.std(vals, ddof=1))
+            tamsd_std[n - 1] = std
+            tamsd_sem[n - 1] = std / np.sqrt(float(vals.size))
 
     tracks_per_lag = np.ones(K, dtype=int)
 
     return MSDResult(
         tau=tau,
         msd=tamsd,
+        msd_std=tamsd_std,
+        msd_sem=tamsd_sem,
         tracks_per_lag=tracks_per_lag,
         dt=float(dt),
         n_max=int(K),
@@ -273,7 +289,7 @@ def build_tau_array(maximum_lag_steps: int, global_dt: float) -> np.ndarray:
     return (np.arange(1, maximum_lag_steps + 1, dtype=float)) * float(global_dt)
 
 
-def average_across_trajectories(per_track_means: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+def average_across_trajectories(per_track_means: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Average per-trajectory MSD values equally across trajectories.
 
     Args:
@@ -282,22 +298,27 @@ def average_across_trajectories(per_track_means: List[np.ndarray]) -> Tuple[np.n
             lags not supported by that trajectory's length.
 
     Returns:
-        Tuple (msd_values, tracks_per_lag) where:
+        Tuple (msd_values, msd_std, tracks_per_lag) where:
           - msd_values: (K,) ensemble-averaged MSD values per lag (nanmean).
+          - msd_std: (K,) sample standard deviation of per-trajectory r² values (ddof=1).
           - tracks_per_lag: (K,) count of trajectories contributing a finite value per lag.
     """
     if not per_track_means:
-        return np.asarray([], dtype=float), np.asarray([], dtype=int)
+        empty = np.asarray([], dtype=float)
+        return empty, empty.copy(), np.asarray([], dtype=int)
 
     stacked = np.vstack(per_track_means)
     msd_values = np.nanmean(stacked, axis=0)
+    msd_std = np.nanstd(stacked, axis=0, ddof=1)
     tracks_per_lag = np.sum(np.isfinite(stacked), axis=0).astype(int)
-    return msd_values, tracks_per_lag
+    return msd_values, msd_std, tracks_per_lag
 
 
 def MSDEmptyResult() -> MSDResult:
     """Return an empty MSDResult for edge cases (no data or too few points)."""
     return MSDResult(
+        np.asarray([], dtype=float),
+        np.asarray([], dtype=float),
         np.asarray([], dtype=float),
         np.asarray([], dtype=float),
         np.asarray([], dtype=int),

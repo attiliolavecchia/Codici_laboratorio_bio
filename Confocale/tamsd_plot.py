@@ -28,16 +28,20 @@ from data_reader import read_trajectories_from_csv, Trajectory
 from msd_analyzer import calculate_time_averaged_msd_per_track
 
 
-def plot_linear_and_save(tau, msd, output_path: Path) -> None:
-    plt.figure(figsize=(7.5, 5.0))
-    plt.plot(tau, msd, marker="o", linestyle="-", color="C1", label="TAMSD")
-    plt.ylabel(r"Time-Averaged MSD")
-    plt.xlabel(r"Time Lag ($\tau$) [seconds]")
-    plt.grid(True, linestyle=":", alpha=0.6)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
+def plot_linear_and_save(tau, msd, output_path: Path, msd_sem=None) -> None:
+    fig, ax = plt.subplots(figsize=(7.5, 5.0))
+    if msd_sem is not None:
+        ax.errorbar(tau, msd, yerr=msd_sem, fmt='o-', color='C1',
+                    capsize=4, capthick=1.2, elinewidth=1.2, label='TAMSD')
+    else:
+        ax.plot(tau, msd, marker='o', linestyle='-', color='C1', label='TAMSD')
+    ax.set_ylabel(r'Time-Averaged MSD')
+    ax.set_xlabel(r'Time Lag ($\tau$) [seconds]')
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
 
 
 essential_description = (
@@ -117,7 +121,7 @@ def main() -> None:
         output_filename = f"tamsd_plot_{str(selected_id).replace(' ', '_')}.svg"
         output_path = output_dir / output_filename
 
-    plot_linear_and_save(result.tau, result.msd, output_path)
+    plot_linear_and_save(result.tau, result.msd, output_path, msd_sem=result.msd_sem)
     print(f"Saved plot to: {output_path.resolve()}")
 
 

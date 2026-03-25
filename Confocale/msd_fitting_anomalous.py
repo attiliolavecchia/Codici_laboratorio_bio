@@ -32,14 +32,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Tuple, Union
+from typing import Dict, Mapping, Optional, Tuple, Union
 
 import numpy as np
 from scipy.optimize import curve_fit
 
 from data_reader import Trajectory, read_trajectories_from_csv
 from msd_analyzer import calculate_ensemble_msd
-from msd_fitting import calculate_r_squared
+from msd_fitting import calculate_reduced_chi_squared
 
 
 @dataclass(frozen=True)
@@ -55,11 +55,11 @@ class AnomalousFitResult:
         tau_fit: Time lag values used in the fit
         msd_fit: MSD values used in the fit
         msd_predicted: Predicted MSD values from the fitted model
-        R_squared: Coefficient of determination (R²)
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         RSS: Residual sum of squares
         optimal_fraction: Optimal fraction of data used (0.1-0.9)
         n_fit_steps: Number of lag steps used for fitting
-        interval_results: Dictionary mapping fraction to (R², RSS) for all tested intervals
+        interval_results: Dictionary mapping fraction to (chi_squared_red, RSS) for all tested intervals
     """
     
     D_alpha: float
@@ -70,7 +70,7 @@ class AnomalousFitResult:
     tau_fit: np.ndarray
     msd_fit: np.ndarray
     msd_predicted: np.ndarray
-    R_squared: float
+    chi_squared_red: float
     RSS: float
     optimal_fraction: float
     n_fit_steps: int
@@ -118,30 +118,38 @@ def fit_msd_anomalous_at_fraction(
     D_alpha_bounds: Tuple[float, float],
     alpha_initial: float,
     alpha_bounds: Tuple[float, float],
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
     """Fit MSD to anomalous diffusion model at a specific fraction of data.
-    
+
     Returns:
-        Tuple of (D_alpha, D_alpha_error, alpha, alpha_error, pcov, 
-                  tau_fit, msd_fit, msd_predicted, R_squared, RSS)
+        Tuple of (D_alpha, D_alpha_error, alpha, alpha_error, pcov,
+                  tau_fit, msd_fit, msd_predicted, chi_squared_red, RSS)
     """
     # Calculate number of steps for this fraction
     n_fit_steps = max(2, int(fit_fraction * n_max))
     tau_max = n_fit_steps * dt
-    
+
     # Select data subset
     mask = tau <= tau_max
     tau_fit = tau[mask]
     msd_fit = msd[mask]
-    
+
     # Remove NaN/inf
     valid = np.isfinite(tau_fit) & np.isfinite(msd_fit) & (tau_fit > 0)
     tau_fit = tau_fit[valid]
     msd_fit = msd_fit[valid]
-    
+
     if tau_fit.size < 3:  # Need at least 3 points for 2-parameter fit
         raise ValueError(f"Insufficient points ({tau_fit.size}) for anomalous fit at fraction {fit_fraction}")
-    
+
+    # Prepare sigma for weighted fit
+    sigma_fit = None
+    if msd_sigma is not None:
+        sigma_subset = np.asarray(msd_sigma, dtype=float)[mask][valid]
+        if np.all(np.isfinite(sigma_subset) & (sigma_subset > 0)):
+            sigma_fit = sigma_subset
+
     # Perform the fit
     try:
         popt, pcov = curve_fit(
@@ -152,13 +160,14 @@ def fit_msd_anomalous_at_fraction(
             bounds=([D_alpha_bounds[0], alpha_bounds[0]], [D_alpha_bounds[1], alpha_bounds[1]]),
             method='trf',
             maxfev=5000,
+            **({"sigma": sigma_fit, "absolute_sigma": True} if sigma_fit is not None else {}),
         )
     except RuntimeError as e:
         raise RuntimeError(f"Fitting failed at fraction {fit_fraction}: {e}")
-    
+
     D_alpha_opt = float(popt[0])
     alpha_opt = float(popt[1])
-    
+
     # Calculate errors
     if pcov is not None and np.all(np.isfinite(pcov)):
         D_alpha_error = float(np.sqrt(pcov[0, 0]))
@@ -166,13 +175,16 @@ def fit_msd_anomalous_at_fraction(
     else:
         D_alpha_error = float('nan')
         alpha_error = float('nan')
-    
+
     # Calculate metrics
     msd_predicted = anomalous_msd_model(tau_fit, D_alpha_opt, alpha_opt)
-    R_squared = calculate_r_squared(msd_fit, msd_predicted)
     RSS = calculate_rss(msd_fit, msd_predicted)
-    
-    return D_alpha_opt, D_alpha_error, alpha_opt, alpha_error, pcov, tau_fit, msd_fit, msd_predicted, R_squared, RSS
+    if sigma_fit is not None:
+        chi_squared_red = calculate_reduced_chi_squared(msd_fit, msd_predicted, sigma_fit, n_params=2)
+    else:
+        chi_squared_red = float('nan')
+
+    return D_alpha_opt, D_alpha_error, alpha_opt, alpha_error, pcov, tau_fit, msd_fit, msd_predicted, chi_squared_red, RSS
 
 
 def fit_msd_anomalous(
@@ -185,14 +197,14 @@ def fit_msd_anomalous(
     alpha_initial: float = 1.0,
     alpha_bounds: Tuple[float, float] = (0.01, 2.0),
     interval_step: float = 0.10,
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> AnomalousFitResult:
     """Fit MSD to anomalous diffusion model testing multiple intervals.
-    
+
     Tests intervals from 10% to 90% in steps of interval_step (default 10%).
-    Selects optimal interval based on:
-    1. Maximum R²
-    2. If multiple intervals have R² within 0.01, select minimum RSS
-    
+    Selects the interval with minimum reduced chi-squared (or minimum RSS if
+    no sigma is available).
+
     Args:
         tau: Array of time lag values [s]
         msd: Array of MSD values [μm²]
@@ -203,51 +215,48 @@ def fit_msd_anomalous(
         alpha_initial: Initial guess for α (default: 1.0 = normal diffusion)
         alpha_bounds: Tuple (lower, upper) bounds for α (default: 0.01-2.0)
         interval_step: Step size for interval search (default: 0.10 = 10%)
-    
+        msd_sigma: Optional array of SEM values for each lag (from MSDResult.msd_sem)
+
     Returns:
         AnomalousFitResult with optimal fit parameters and all interval results
     """
     # Generate fractions to test: 0.1, 0.2, ..., 0.9
     fractions = np.arange(interval_step, 1.0, interval_step)
-    
-    # Store results for each fraction
-    results: Dict[float, Tuple[float, float, float, float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]] = {}
+
+    results: Dict[float, Tuple] = {}
     interval_results: Dict[float, Tuple[float, float]] = {}
-    
+
     print(f"\nTesting intervals from {fractions[0]:.0%} to {fractions[-1]:.0%} in {interval_step:.0%} steps...")
-    
+
     for frac in fractions:
         try:
-            D_alpha, D_alpha_err, alpha, alpha_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_anomalous_at_fraction(
+            D_alpha, D_alpha_err, alpha, alpha_err, pcov, tau_f, msd_f, msd_p, chi_sq_red, rss = fit_msd_anomalous_at_fraction(
                 tau, msd, n_max, dt, frac,
                 D_alpha_initial, D_alpha_bounds,
-                alpha_initial, alpha_bounds
+                alpha_initial, alpha_bounds,
+                msd_sigma,
             )
-            results[frac] = (D_alpha, D_alpha_err, alpha, alpha_err, R2, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
-            interval_results[frac] = (R2, rss)
-            print(f"  {frac:4.0%}: R^2 = {R2:.6f}, RSS = {rss:.6e}, D_alpha = {D_alpha:.6e}, alpha = {alpha:.4f}")
+            results[frac] = (D_alpha, D_alpha_err, alpha, alpha_err, chi_sq_red, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
+            interval_results[frac] = (chi_sq_red, rss)
+            print(f"  {frac:4.0%}: chi^2_red = {chi_sq_red:.4f}, RSS = {rss:.6e}, D_alpha = {D_alpha:.6e}, alpha = {alpha:.4f}")
         except (ValueError, RuntimeError) as e:
             print(f"  {frac:4.0%}: Failed - {e}")
             continue
-    
+
     if len(results) == 0:
         raise RuntimeError("No valid fits obtained across any interval")
-    
-    # Find optimal fraction
-    # Step 1: Find maximum R²
-    max_R2 = max(r[4] for r in results.values())
-    
-    # Step 2: Find all fractions within 0.01 of max R²
-    candidates = [(frac, r) for frac, r in results.items() if r[4] >= max_R2 - 0.01]
-    
-    # Step 3: Among candidates, select minimum RSS
-    optimal_fraction = min(candidates, key=lambda x: x[1][9])[0]
-    
-    # Extract optimal result
-    D_alpha, D_alpha_err, alpha, alpha_err, R2, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal_fraction]
-    
-    print(f"\nOptimal interval: {optimal_fraction:.0%} (R^2 = {R2:.6f}, RSS = {rss:.6e})")
-    
+
+    # Select interval with minimum chi_squared_red (or minimum RSS as fallback)
+    chi_vals = {f: r[4] for f, r in results.items()}
+    if any(np.isfinite(v) for v in chi_vals.values()):
+        optimal_fraction = min((f for f in chi_vals if np.isfinite(chi_vals[f])), key=lambda f: chi_vals[f])
+    else:
+        optimal_fraction = min(results, key=lambda f: results[f][9])
+
+    D_alpha, D_alpha_err, alpha, alpha_err, chi_sq_red, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal_fraction]
+
+    print(f"\nOptimal interval: {optimal_fraction:.0%} (chi^2_red = {chi_sq_red:.4f}, RSS = {rss:.6e})")
+
     return AnomalousFitResult(
         D_alpha=D_alpha,
         D_alpha_error=D_alpha_err,
@@ -257,7 +266,7 @@ def fit_msd_anomalous(
         tau_fit=tau_f,
         msd_fit=msd_f,
         msd_predicted=msd_p,
-        R_squared=R2,
+        chi_squared_red=chi_sq_red,
         RSS=rss,
         optimal_fraction=optimal_fraction,
         n_fit_steps=n_steps,
@@ -273,15 +282,15 @@ def plot_anomalous_fit(
     D_alpha_error: float,
     alpha: float,
     alpha_error: float,
-    R_squared: float,
+    chi_squared_red: float,
     output_path: Path,
     optimal_fraction: float = 0.10,
     n_fit_steps: int = 0,
 ) -> None:
     """Create and save a plot of MSD data with anomalous diffusion fit.
-    
+
     Plots data points and fit line for anomalous model: MSD = 4D_α·τ^α
-    
+
     Args:
         tau_fit: Time lag values used in the fit
         msd_fit: MSD data values used in the fit
@@ -290,7 +299,7 @@ def plot_anomalous_fit(
         D_alpha_error: Standard error on D_α
         alpha: Fitted anomalous exponent
         alpha_error: Standard error on α
-        R_squared: Coefficient of determination
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         output_path: Path to save the figure
         optimal_fraction: Optimal fraction of data used for fitting
         n_fit_steps: Number of lag steps used for fitting
@@ -325,7 +334,7 @@ def plot_anomalous_fit(
     textstr = '\n'.join([
         r'$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$' % (D_alpha, D_alpha_error),
         r'$\alpha = (%.4f \pm %.4f)$' % (alpha, alpha_error),
-        r'$R^2 = %.6f$' % R_squared,
+        r'$\chi^2_\nu = %.4f$' % chi_squared_red,
     ])
     
     # Place text box in upper right with white background
@@ -486,7 +495,7 @@ Example usage:
     if args.manual_fraction is not None:
         print(f"\nUsing manual fraction: {args.manual_fraction:.0%}")
         try:
-            D_alpha, D_alpha_err, alpha, alpha_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_anomalous_at_fraction(
+            D_alpha, D_alpha_err, alpha, alpha_err, pcov, tau_f, msd_f, msd_p, chi_sq_red, rss = fit_msd_anomalous_at_fraction(
                 tau=msd_result.tau,
                 msd=msd_result.msd,
                 n_max=msd_result.n_max,
@@ -496,11 +505,12 @@ Example usage:
                 D_alpha_bounds=tuple(args.D_alpha_bounds),
                 alpha_initial=args.alpha_initial,
                 alpha_bounds=tuple(args.alpha_bounds),
+                msd_sigma=msd_result.msd_sem,
             )
-            
+
             n_steps = int(args.manual_fraction * msd_result.n_max)
-            interval_results = {args.manual_fraction: (R2, rss)}
-            
+            interval_results = {args.manual_fraction: (chi_sq_red, rss)}
+
             # Create result object
             anomalous_result = AnomalousFitResult(
                 D_alpha=D_alpha,
@@ -511,13 +521,13 @@ Example usage:
                 tau_fit=tau_f,
                 msd_fit=msd_f,
                 msd_predicted=msd_p,
-                R_squared=R2,
+                chi_squared_red=chi_sq_red,
                 RSS=rss,
                 optimal_fraction=args.manual_fraction,
                 n_fit_steps=n_steps,
                 interval_results=interval_results,
             )
-            
+        
         except (ValueError, RuntimeError) as e:
             print(f"\nError during manual fraction fit: {e}")
             return
@@ -534,6 +544,7 @@ Example usage:
                 alpha_initial=args.alpha_initial,
                 alpha_bounds=tuple(args.alpha_bounds),
                 interval_step=args.interval_step,
+                msd_sigma=msd_result.msd_sem,
             )
         except RuntimeError as e:
             print(f"\nError during anomalous fitting: {e}")
@@ -547,7 +558,7 @@ Example usage:
     print(f"  {interval_label}:                {anomalous_result.optimal_fraction:.0%} ({anomalous_result.n_fit_steps} steps)")
     print(f"  Diffusion Coeff (D_alpha):     ({anomalous_result.D_alpha:.6e} +/- {anomalous_result.D_alpha_error:.2e}) um^2/s^alpha")
     print(f"  Anomalous exponent (alpha):    ({anomalous_result.alpha:.4f} +/- {anomalous_result.alpha_error:.4f})")
-    print(f"  R^2:                           {anomalous_result.R_squared:.6f}")
+    print(f"  chi^2_red:                     {anomalous_result.chi_squared_red:.6f}")
     print(f"  RSS:                           {anomalous_result.RSS:.6e}")
     print(f"  Fit tau range:                 [{anomalous_result.tau_fit.min():.2f}, {anomalous_result.tau_fit.max():.2f}] s")
     
@@ -577,7 +588,7 @@ Example usage:
         D_alpha_error=anomalous_result.D_alpha_error,
         alpha=anomalous_result.alpha,
         alpha_error=anomalous_result.alpha_error,
-        R_squared=anomalous_result.R_squared,
+        chi_squared_red=anomalous_result.chi_squared_red,
         output_path=plot_path,
         optimal_fraction=anomalous_result.optimal_fraction,
         n_fit_steps=anomalous_result.n_fit_steps,
@@ -601,23 +612,24 @@ Example usage:
                 fit_fraction=anomalous_result.optimal_fraction,
                 D_initial=args.D_alpha_initial,
                 D_bounds=tuple(args.D_alpha_bounds),
+                msd_sigma=msd_result.msd_sem,
             )
-            
+
             print(f"\nNormal diffusion (alpha=1, MSD = 4D*tau):")
             print(f"  D = ({linear_result.D:.6e} +/- {linear_result.D_error:.2e}) um^2/s")
-            print(f"  R^2 = {linear_result.R_squared:.6f}")
-            
+            print(f"  chi^2_red = {linear_result.chi_squared_red:.6f}")
+
             print(f"\nAnomalous diffusion (alpha free, MSD = 4*D_alpha*tau^alpha):")
             print(f"  D_alpha = ({anomalous_result.D_alpha:.6e} +/- {anomalous_result.D_alpha_error:.2e}) um^2/s^alpha")
             print(f"  alpha = ({anomalous_result.alpha:.4f} +/- {anomalous_result.alpha_error:.4f})")
-            print(f"  R^2 = {anomalous_result.R_squared:.6f}")
-            
-            # Compare R² values
-            R2_improvement = anomalous_result.R_squared - linear_result.R_squared
-            if R2_improvement > 0.01:
-                print(f"\nAnomalous model provides better fit (Delta_R^2 = {R2_improvement:+.4f}")
+            print(f"  chi^2_red = {anomalous_result.chi_squared_red:.6f}")
+
+            # Lower chi^2_red = better fit
+            chi_improvement = linear_result.chi_squared_red - anomalous_result.chi_squared_red
+            if chi_improvement > 0.1:
+                print(f"\nAnomalous model provides better fit (Delta_chi2_red = {chi_improvement:+.4f})")
             else:
-                print(f"\nBoth models fit similarly well (Delta_R^2 = {R2_improvement:+.4f}")
+                print(f"\nBoth models fit similarly well (Delta_chi2_red = {chi_improvement:+.4f})")
             
             print(f"{'='*60}")
             

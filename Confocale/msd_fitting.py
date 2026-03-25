@@ -42,7 +42,7 @@ class FitResult:
         tau_fit: Time lag values used in the fit (subset where τ ≤ tau_max)
         msd_fit: MSD values used in the fit (corresponding to tau_fit)
         msd_predicted: Predicted MSD values from the fitted model over tau_fit range
-        R_squared: Coefficient of determination (R²) for the fit quality
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit quality (NaN if no sigma provided)
     """
     
     D: float
@@ -51,7 +51,8 @@ class FitResult:
     tau_fit: np.ndarray
     msd_fit: np.ndarray
     msd_predicted: np.ndarray
-    R_squared: float
+    chi_squared_red: float
+    msd_sigma_fit: Optional[np.ndarray] = None
 
 
 def linear_msd_model(tau: np.ndarray, D: float) -> np.ndarray:
@@ -93,6 +94,34 @@ def calculate_r_squared(y_observed: np.ndarray, y_predicted: np.ndarray) -> floa
     return 1.0 - (ss_res / ss_tot)
 
 
+def calculate_reduced_chi_squared(
+    y_observed: np.ndarray,
+    y_predicted: np.ndarray,
+    sigma: np.ndarray,
+    n_params: int,
+) -> float:
+    """Calculate the reduced chi-squared statistic.
+
+    χ²_ν = (1/ν) · Σ((y_observed - y_predicted)² / σ²)
+
+    where ν = N - n_params is the number of degrees of freedom.
+    A value near 1 indicates the model fits the data well within the uncertainties.
+
+    Args:
+        y_observed: Observed data values
+        y_predicted: Predicted values from the model
+        sigma: Uncertainties on y_observed (e.g., SEM of EA-MSD)
+        n_params: Number of free parameters in the model
+
+    Returns:
+        Reduced chi-squared value (χ²_ν). Returns nan if ν ≤ 0.
+    """
+    nu = len(y_observed) - n_params
+    if nu <= 0:
+        return float('nan')
+    return float(np.sum(((y_observed - y_predicted) / sigma) ** 2) / nu)
+
+
 def fit_msd_linear(
     tau: np.ndarray,
     msd: np.ndarray,
@@ -101,6 +130,7 @@ def fit_msd_linear(
     fit_fraction: float = 0.10,
     D_initial: float = 1e-2,
     D_bounds: Tuple[float, float] = (1e-6, 10.0),
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> FitResult:
     """Fit MSD data to linear model MSD(τ) = 4D·τ using Levenberg-Marquardt algorithm.
     
@@ -140,7 +170,7 @@ def fit_msd_linear(
             - pcov: Covariance matrix
             - tau_fit, msd_fit: Data subset used for fitting
             - msd_predicted: Model predictions for tau_fit
-            - R_squared: Goodness of fit metric
+            - chi_squared_red: Goodness of fit metric (reduced chi-squared)
     
     Raises:
         ValueError: If input arrays are incompatible or insufficient data for fitting
@@ -183,7 +213,14 @@ def fit_msd_linear(
     
     if tau_fit.size < 2:
         raise ValueError("Insufficient valid (finite) data points after filtering")
-    
+
+    # Prepare sigma for weighted fit
+    sigma_fit = None
+    if msd_sigma is not None:
+        sigma_subset = np.asarray(msd_sigma, dtype=float)[mask][valid]
+        if np.all(np.isfinite(sigma_subset) & (sigma_subset > 0)):
+            sigma_fit = sigma_subset
+
     # Validate bounds
     D_lower, D_upper = D_bounds
     if D_lower <= 0:
@@ -203,6 +240,7 @@ def fit_msd_linear(
             p0=[D_initial],
             bounds=([D_lower], [D_upper]),
             method='trf',  # Trust Region Reflective handles bounds well
+            **({"sigma": sigma_fit, "absolute_sigma": True} if sigma_fit is not None else {}),
         )
     except RuntimeError as e:
         raise RuntimeError(f"Curve fitting failed: {e}")
@@ -218,10 +256,13 @@ def fit_msd_linear(
         D_error = float('nan')
         print("Warning: Could not estimate error on D from covariance matrix")
     
-    # Calculate predicted values and R²
+    # Calculate predicted values and goodness-of-fit
     msd_predicted = linear_msd_model(tau_fit, D_optimal)
-    R_squared = calculate_r_squared(msd_fit, msd_predicted)
-    
+    if sigma_fit is not None:
+        chi_squared_red = calculate_reduced_chi_squared(msd_fit, msd_predicted, sigma_fit, n_params=1)
+    else:
+        chi_squared_red = float('nan')
+
     return FitResult(
         D=D_optimal,
         D_error=D_error,
@@ -229,7 +270,8 @@ def fit_msd_linear(
         tau_fit=tau_fit,
         msd_fit=msd_fit,
         msd_predicted=msd_predicted,
-        R_squared=R_squared,
+        chi_squared_red=chi_squared_red,
+        msd_sigma_fit=sigma_fit,
     )
 
 
@@ -248,11 +290,14 @@ if __name__ == "__main__":
     msd_test_noisy = msd_test + noise
     
     # Fit the data
-    result = fit_msd_linear(tau_test, msd_test_noisy, tau_max=15.0)
+    n_max_test = len(tau_test)
+    dt_test = float(tau_test[1] - tau_test[0])
+    sigma_test = 0.05 * np.abs(msd_test) + 1e-6  # synthetic SEM proportional to MSD
+    result = fit_msd_linear(tau_test, msd_test_noisy, n_max=n_max_test, dt=dt_test, msd_sigma=sigma_test)
     
     print(f"\nTrue D: {D_true:.6e} μm²/s")
     print(f"Fitted D: {result.D:.6e} ± {result.D_error:.6e} μm²/s")
-    print(f"R²: {result.R_squared:.6f}")
+    print(f"chi^2_red: {result.chi_squared_red:.6f}")
     print(f"Points used in fit: {result.tau_fit.size}")
     print(f"Fit range: τ = [{result.tau_fit.min():.2f}, {result.tau_fit.max():.2f}] s")
     print("\nTest passed!")

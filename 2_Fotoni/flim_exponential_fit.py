@@ -421,13 +421,13 @@ def plot_mono_exponential_fit(
     
     # Add text box with fit parameters (outside plot area on right)
     textstr = '\n'.join([
-        r'$\mathbf{Mono\text{-}exponential\ Fit}$',
+        r'$\mathbf{Mono-exponential\ Fit}$',
         r'$I(t) = I_0 \cdot e^{-t/\tau}$',
         '',
-        fr'$I_0 = {fit_result.I0:.4f} \pm {fit_result.I0_error:.4f}$',
-        fr'$\tau = {fit_result.tau:.3f} \pm {fit_result.tau_error:.3f}\,\mathrm{{ns}}$',
+        f'$I_0$ = {fit_result.I0:.4f} ± {fit_result.I0_error:.4f}',
+        f'$\\tau$ = {fit_result.tau:.3f} ± {fit_result.tau_error:.3f} ns',
         '',
-        fr'$R^2 = {fit_result.R_squared:.6f}$'
+        f'$R^2$ = {fit_result.R_squared:.6f}'
     ])
     
     props = dict(boxstyle='round', facecolor='white', alpha=0.95, edgecolor='gray')
@@ -504,16 +504,16 @@ def plot_bi_exponential_fit(
     
     # Add text box with fit parameters (outside plot area on right)
     textstr = '\n'.join([
-        r'$\mathbf{Bi\text{-}exponential\ Fit}$',
+        r'$\mathbf{Bi-exponential\ Fit}$',
         r'$I(t) = A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2}$',
         '',
-        fr'$A_1 = {fit_result.A1:.4f} \pm {fit_result.A1_error:.4f}$',
-        fr'$\tau_1 = {fit_result.tau1:.3f} \pm {fit_result.tau1_error:.3f}\,\mathrm{{ns}}$',
+        fr'$A_1 = {fit_result.A1:.4f} \\pm {fit_result.A1_error:.4f}$',
+        fr'$\\tau_1 = {fit_result.tau1:.3f} \\pm {fit_result.tau1_error:.3f}\,ns$',
         '',
-        fr'$A_2 = {fit_result.A2:.4f} \pm {fit_result.A2_error:.4f}$',
-        fr'$\tau_2 = {fit_result.tau2:.3f} \pm {fit_result.tau2_error:.3f}\,\mathrm{{ns}}$',
+        fr'$A_2 = {fit_result.A2:.4f} \\pm {fit_result.A2_error:.4f}$',
+        fr'$\\tau_2 = {fit_result.tau2:.3f} \\pm {fit_result.tau2_error:.3f}\,ns$',
         '',
-        fr'$\langle\tau\rangle = {fit_result.tau_avg:.3f}\,\mathrm{{ns}}$',
+        fr'$\\langle\\tau\\rangle = {fit_result.tau_avg:.3f}\,ns$',
         fr'$R^2 = {fit_result.R_squared:.6f}$'
     ])
     
@@ -624,12 +624,6 @@ FLIM Theory:
     parser.add_argument('--output-name', type=str, default=None,
                         help='Custom output filename prefix (without extension)')
     
-    parser.add_argument('--x-column', type=str, default='X',
-                        help='Name of the X column in CSV (default: X)')
-    
-    parser.add_argument('--y-column', type=str, default='Y',
-                        help='Name of the Y column in CSV (default: Y)')
-    
     args = parser.parse_args()
     
     # Set output directory
@@ -640,8 +634,7 @@ FLIM Theory:
     print(f"\nReading FLIM data from: {args.csv}")
     print(f"Laser repetition rate: {args.laser_rate} MHz")
     
-    data = read_flim_csv(args.csv, laser_rep_rate_mhz=args.laser_rate, 
-                         x_column=args.x_column, y_column=args.y_column)
+    data = read_flim_csv(args.csv, laser_rep_rate_mhz=args.laser_rate)
     print(get_data_summary(data))
     
     # Generate base name from input file for output naming

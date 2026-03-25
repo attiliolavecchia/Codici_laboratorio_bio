@@ -24,9 +24,13 @@
 !/Confocale/msd_fitting_nonlinear.py
 !/Confocale/msd_fitting_anomalous.py
 !/Confocale/msd_fitting_anomalous_drift.py
+!/Confocale/run_fits_with_errors.py
+!/Confocale/run_msd_plots.py
 
 # Keep the Docu folder itself so we can selectively include files inside it
 !/Confocale/Docu/
+/Confocale/Docu/*
+
 # Allow only these files in Docu
 !Confocale//Docu/COMPLETE_USER_GUIDE.md
 !Confocale/Docu/OVERVIEW.md

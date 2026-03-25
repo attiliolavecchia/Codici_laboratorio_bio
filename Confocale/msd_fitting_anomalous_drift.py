@@ -37,14 +37,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Tuple, Union
+from typing import Dict, Mapping, Optional, Tuple, Union
 
 import numpy as np
 from scipy.optimize import curve_fit
 
 from data_reader import Trajectory, read_trajectories_from_csv
 from msd_analyzer import calculate_ensemble_msd
-from msd_fitting import calculate_r_squared
+from msd_fitting import calculate_r_squared, calculate_reduced_chi_squared
 
 
 @dataclass(frozen=True)
@@ -87,11 +87,11 @@ class DriftAnomalousFitResult:
         tau_fit: Time lag values used in the fit
         msd_fit: MSD values used in the fit
         msd_predicted: Predicted MSD values from the fitted model
-        R_squared: Coefficient of determination (R²)
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         RSS: Residual sum of squares
         optimal_fraction: Optimal fraction of data used (0.1-0.9)
         n_fit_steps: Number of lag steps used for fitting
-        interval_results: Dictionary mapping fraction to (R², RSS) for all tested intervals
+        interval_results: Dictionary mapping fraction to (chi_squared_red, RSS) for all tested intervals
     """
     
     D_alpha: float
@@ -104,7 +104,7 @@ class DriftAnomalousFitResult:
     tau_fit: np.ndarray
     msd_fit: np.ndarray
     msd_predicted: np.ndarray
-    R_squared: float
+    chi_squared_red: float
     RSS: float
     optimal_fraction: float
     n_fit_steps: int
@@ -245,12 +245,13 @@ def fit_msd_anomalous_drift_at_fraction(
     alpha_bounds: Tuple[float, float],
     v_initial: float,
     v_bounds: Tuple[float, float],
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> Tuple[float, float, float, float, float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
     """Fit MSD to anomalous drift model at a specific fraction of data.
     
     Returns:
         Tuple of (D_alpha, D_alpha_error, alpha, alpha_error, v, v_error, pcov,
-                  tau_fit, msd_fit, msd_predicted, R_squared, RSS)
+                  tau_fit, msd_fit, msd_predicted, chi_squared_red, RSS)
     """
     # Calculate number of steps for this fraction
     n_fit_steps = max(2, int(fit_fraction * n_max))
@@ -268,7 +269,14 @@ def fit_msd_anomalous_drift_at_fraction(
     
     if tau_fit.size < 4:  # Need at least 4 points for 3-parameter fit
         raise ValueError(f"Insufficient points ({tau_fit.size}) for anomalous drift fit at fraction {fit_fraction}")
-    
+
+    # Prepare sigma for weighted fit
+    sigma_fit = None
+    if msd_sigma is not None:
+        sigma_subset = np.asarray(msd_sigma, dtype=float)[mask][valid]
+        if np.all(np.isfinite(sigma_subset) & (sigma_subset > 0)):
+            sigma_fit = sigma_subset
+
     # Perform the fit
     try:
         popt, pcov = curve_fit(
@@ -282,6 +290,7 @@ def fit_msd_anomalous_drift_at_fraction(
             ),
             method='trf',
             maxfev=10000,
+            **({"sigma": sigma_fit, "absolute_sigma": True} if sigma_fit is not None else {}),
         )
     except RuntimeError as e:
         raise RuntimeError(f"Fitting failed at fraction {fit_fraction}: {e}")
@@ -302,10 +311,13 @@ def fit_msd_anomalous_drift_at_fraction(
     
     # Calculate metrics
     msd_predicted = anomalous_drift_msd_model(tau_fit, D_alpha_opt, alpha_opt, v_opt)
-    R_squared = calculate_r_squared(msd_fit, msd_predicted)
     RSS = calculate_rss(msd_fit, msd_predicted)
-    
-    return D_alpha_opt, D_alpha_error, alpha_opt, alpha_error, v_opt, v_error, pcov, tau_fit, msd_fit, msd_predicted, R_squared, RSS
+    if sigma_fit is not None:
+        chi_squared_red = calculate_reduced_chi_squared(msd_fit, msd_predicted, sigma_fit, n_params=3)
+    else:
+        chi_squared_red = float('nan')
+
+    return D_alpha_opt, D_alpha_error, alpha_opt, alpha_error, v_opt, v_error, pcov, tau_fit, msd_fit, msd_predicted, chi_squared_red, RSS
 
 
 def fit_msd_anomalous_drift(
@@ -319,6 +331,7 @@ def fit_msd_anomalous_drift(
     alpha_initial: float = 1.0,
     alpha_bounds: Tuple[float, float] = (0.01, 2.0),
     interval_step: float = 0.10,
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> DriftAnomalousFitResult:
     """Fit MSD to anomalous drift model testing multiple intervals.
     
@@ -353,37 +366,35 @@ def fit_msd_anomalous_drift(
     
     for frac in fractions:
         try:
-            D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_anomalous_drift_at_fraction(
+            D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2_r, rss = fit_msd_anomalous_drift_at_fraction(
                 tau, msd, n_max, dt, frac,
                 D_alpha_initial, D_alpha_bounds,
                 alpha_initial, alpha_bounds,
-                velocity_stats.v_initial, velocity_stats.v_bounds
+                velocity_stats.v_initial, velocity_stats.v_bounds,
+                msd_sigma,
             )
-            results[frac] = (D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, R2, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
-            interval_results[frac] = (R2, rss)
-            print(f"  {frac:4.0%}: R^2 = {R2:.6f}, RSS = {rss:.6e}, D_alpha = {D_alpha:.6e}, alpha = {alpha:.4f}, v = {v:.6e}")
+            results[frac] = (D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, chi2_r, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
+            interval_results[frac] = (chi2_r, rss)
+            print(f"  {frac:4.0%}: chi^2_red = {chi2_r:.4f}, RSS = {rss:.6e}, D_alpha = {D_alpha:.6e}, alpha = {alpha:.4f}, v = {v:.6e}")
         except (ValueError, RuntimeError) as e:
             print(f"  {frac:4.0%}: Failed - {e}")
             continue
-    
+
     if len(results) == 0:
         raise RuntimeError("No valid fits obtained across any interval")
-    
-    # Find optimal fraction
-    # Step 1: Find maximum R²
-    max_R2 = max(r[6] for r in results.values())
-    
-    # Step 2: Find all fractions within 0.01 of max R²
-    candidates = [(frac, r) for frac, r in results.items() if r[6] >= max_R2 - 0.01]
-    
-    # Step 3: Among candidates, select minimum RSS
-    optimal_fraction = min(candidates, key=lambda x: x[1][11])[0]
-    
+
+    # Select interval with minimum chi_squared_red (or minimum RSS as fallback)
+    chi_vals = {f: r[6] for f, r in results.items()}
+    if any(np.isfinite(v) for v in chi_vals.values()):
+        optimal_fraction = min((f for f in chi_vals if np.isfinite(chi_vals[f])), key=lambda f: chi_vals[f])
+    else:
+        optimal_fraction = min(results, key=lambda f: results[f][11])
+
     # Extract optimal result
-    D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, R2, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal_fraction]
-    
-    print(f"\nOptimal interval: {optimal_fraction:.0%} (R^2 = {R2:.6f}, RSS = {rss:.6e})")
-    
+    D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, chi2_r, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal_fraction]
+
+    print(f"\nOptimal interval: {optimal_fraction:.0%} (chi^2_red = {chi2_r:.4f}, RSS = {rss:.6e})")
+
     return DriftAnomalousFitResult(
         D_alpha=D_alpha,
         D_alpha_error=D_alpha_err,
@@ -395,7 +406,7 @@ def fit_msd_anomalous_drift(
         tau_fit=tau_f,
         msd_fit=msd_f,
         msd_predicted=msd_p,
-        R_squared=R2,
+        chi_squared_red=chi2_r,
         RSS=rss,
         optimal_fraction=optimal_fraction,
         n_fit_steps=n_steps,
@@ -457,7 +468,7 @@ def plot_anomalous_drift_fit(
     alpha_error: float,
     v: float,
     v_error: float,
-    R_squared: float,
+    chi_squared_red: float,
     output_path: Path,
     optimal_fraction: float = 0.10,
     n_fit_steps: int = 0,
@@ -476,7 +487,7 @@ def plot_anomalous_drift_fit(
         alpha_error: Standard error on α
         v: Fitted drift velocity [μm/s]
         v_error: Standard error on v
-        R_squared: Coefficient of determination
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         output_path: Path to save the figure
         optimal_fraction: Optimal fraction of data used for fitting
         n_fit_steps: Number of lag steps used for fitting
@@ -512,7 +523,7 @@ def plot_anomalous_drift_fit(
         r'$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$' % (D_alpha, D_alpha_error),
         r'$\alpha = (%.4f \pm %.4f)$' % (alpha, alpha_error),
         r'$v = (%.2e \pm %.1e)\ \mu m/s$' % (v, v_error),
-        r'$R^2 = %.6f$' % R_squared,
+        r'$\chi^2_\nu = %.6f$' % chi_squared_red,
     ])
     
     # Place text box in upper right with white background
@@ -712,7 +723,7 @@ Example usage:
     if args.manual_fraction is not None:
         print(f"\nUsing manual fraction: {args.manual_fraction:.0%}")
         try:
-            D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_anomalous_drift_at_fraction(
+            D_alpha, D_alpha_err, alpha, alpha_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2_r, rss = fit_msd_anomalous_drift_at_fraction(
                 tau=msd_result.tau,
                 msd=msd_result.msd,
                 n_max=msd_result.n_max,
@@ -724,11 +735,12 @@ Example usage:
                 alpha_bounds=tuple(args.alpha_bounds),
                 v_initial=velocity_stats.v_initial,
                 v_bounds=velocity_stats.v_bounds,
+                msd_sigma=msd_result.msd_sem,
             )
-            
+
             n_steps = int(args.manual_fraction * msd_result.n_max)
-            interval_results = {args.manual_fraction: (R2, rss)}
-            
+            interval_results = {args.manual_fraction: (chi2_r, rss)}
+
             # Create result object
             drift_anomalous_result = DriftAnomalousFitResult(
                 D_alpha=D_alpha,
@@ -741,7 +753,7 @@ Example usage:
                 tau_fit=tau_f,
                 msd_fit=msd_f,
                 msd_predicted=msd_p,
-                R_squared=R2,
+                chi_squared_red=chi2_r,
                 RSS=rss,
                 optimal_fraction=args.manual_fraction,
                 n_fit_steps=n_steps,
@@ -765,6 +777,7 @@ Example usage:
                 alpha_initial=args.alpha_initial,
                 alpha_bounds=tuple(args.alpha_bounds),
                 interval_step=args.interval_step,
+                msd_sigma=msd_result.msd_sem,
             )
         except RuntimeError as e:
             print(f"\nError during anomalous drift fitting: {e}")
@@ -779,7 +792,7 @@ Example usage:
     print(f"  Diffusion Coeff (D_alpha):     ({drift_anomalous_result.D_alpha:.6e} +/- {drift_anomalous_result.D_alpha_error:.2e}) um^2/s^alpha")
     print(f"  Anomalous exponent (alpha):    ({drift_anomalous_result.alpha:.4f} +/- {drift_anomalous_result.alpha_error:.4f})")
     print(f"  Drift Velocity (v):            ({drift_anomalous_result.v:.6e} +/- {drift_anomalous_result.v_error:.2e}) um/s")
-    print(f"  R^2:                           {drift_anomalous_result.R_squared:.6f}")
+    print(f"  chi^2_red:                         {drift_anomalous_result.chi_squared_red:.6f}")
     print(f"  RSS:                           {drift_anomalous_result.RSS:.6e}")
     print(f"  Fit tau range:                 [{drift_anomalous_result.tau_fit.min():.2f}, {drift_anomalous_result.tau_fit.max():.2f}] s")
     
@@ -811,7 +824,7 @@ Example usage:
         alpha_error=drift_anomalous_result.alpha_error,
         v=drift_anomalous_result.v,
         v_error=drift_anomalous_result.v_error,
-        R_squared=drift_anomalous_result.R_squared,
+        chi_squared_red=drift_anomalous_result.chi_squared_red,
         output_path=plot_path,
         optimal_fraction=drift_anomalous_result.optimal_fraction,
         n_fit_steps=drift_anomalous_result.n_fit_steps,
@@ -836,25 +849,26 @@ Example usage:
                 alpha_initial=args.alpha_initial,
                 alpha_bounds=tuple(args.alpha_bounds),
                 interval_step=args.interval_step,
+                msd_sigma=msd_result.msd_sem,
             )
-            
+
             print(f"\nNon-drifting model (MSD = 4*D_alpha*tau^alpha):")
             print(f"  D_alpha = ({no_drift_result.D_alpha:.6e} +/- {no_drift_result.D_alpha_error:.2e}) um^2/s^alpha")
             print(f"  alpha = ({no_drift_result.alpha:.4f} +/- {no_drift_result.alpha_error:.4f})")
-            print(f"  R^2 = {no_drift_result.R_squared:.6f}")
-            
+            print(f"  chi^2_red = {no_drift_result.chi_squared_red:.6f}")
+
             print(f"\nDrifting model (MSD = 4*D_alpha*tau^alpha + v^2*tau^2):")
             print(f"  D_alpha = ({drift_anomalous_result.D_alpha:.6e} +/- {drift_anomalous_result.D_alpha_error:.2e}) um^2/s^alpha")
             print(f"  alpha = ({drift_anomalous_result.alpha:.4f} +/- {drift_anomalous_result.alpha_error:.4f})")
             print(f"  v = ({drift_anomalous_result.v:.6e} +/- {drift_anomalous_result.v_error:.2e}) um/s")
-            print(f"  R^2 = {drift_anomalous_result.R_squared:.6f}")
-            
-            # Compare R² values
-            R2_improvement = drift_anomalous_result.R_squared - no_drift_result.R_squared
-            if R2_improvement > 0.01:
-                print(f"\nDrifting model provides better fit (Delta_R^2 = {R2_improvement:+.4f}")
+            print(f"  chi^2_red = {drift_anomalous_result.chi_squared_red:.6f}")
+
+            # Lower chi^2_red = better fit
+            chi_improvement = no_drift_result.chi_squared_red - drift_anomalous_result.chi_squared_red
+            if chi_improvement > 0.1:
+                print(f"\nDrifting model provides better fit (Delta_chi2_red = {chi_improvement:+.4f}")
             else:
-                print(f"\nBoth models fit similarly well (Delta_R^2 = {R2_improvement:+.4f}")
+                print(f"\nBoth models fit similarly well (Delta_chi2_red = {chi_improvement:+.4f}")
             
             print(f"{'='*60}")
             

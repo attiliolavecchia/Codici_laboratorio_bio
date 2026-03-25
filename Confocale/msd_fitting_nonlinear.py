@@ -34,7 +34,7 @@ from scipy.optimize import curve_fit
 
 from data_reader import Trajectory, read_trajectories_from_csv, estimate_global_time_step
 from msd_analyzer import calculate_ensemble_msd
-from msd_fitting import fit_msd_linear, calculate_r_squared
+from msd_fitting import fit_msd_linear, calculate_r_squared, calculate_reduced_chi_squared
 from plot_msd_fit import plot_msd_with_nonlinear_fit
 
 
@@ -76,11 +76,11 @@ class NonlinearFitResult:
         tau_fit: Time lag values used in the fit
         msd_fit: MSD values used in the fit
         msd_predicted: Predicted MSD values from the fitted model
-        R_squared: Coefficient of determination (R²)
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         RSS: Residual sum of squares
         optimal_fraction: Optimal fraction of data used (0.1-0.9)
         n_fit_steps: Number of lag steps used for fitting
-        interval_results: Dictionary mapping fraction to (R², RSS) for all tested intervals
+        interval_results: Dictionary mapping fraction to (chi_squared_red, RSS) for all tested intervals
     """
     
     D: float
@@ -91,11 +91,12 @@ class NonlinearFitResult:
     tau_fit: np.ndarray
     msd_fit: np.ndarray
     msd_predicted: np.ndarray
-    R_squared: float
+    chi_squared_red: float
     RSS: float
     optimal_fraction: float
     n_fit_steps: int
     interval_results: Dict[float, Tuple[float, float]]
+    msd_sigma_fit: Optional[np.ndarray] = None
 
 
 def compute_trajectory_velocity(traj: Trajectory) -> float:
@@ -229,11 +230,12 @@ def fit_msd_nonlinear_at_fraction(
     D_bounds: Tuple[float, float],
     v_initial: float,
     v_bounds: Tuple[float, float],
-) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
+    msd_sigma: Optional[np.ndarray] = None,
+) -> Tuple[float, float, float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, Optional[np.ndarray]]:
     """Fit MSD to nonlinear model at a specific fraction of data.
     
     Returns:
-        Tuple of (D, D_error, v, v_error, pcov, tau_fit, msd_fit, msd_predicted, R_squared, RSS)
+        Tuple of (D, D_error, v, v_error, pcov, tau_fit, msd_fit, msd_predicted, chi_squared_red, RSS, sigma_fit)
     """
     # Calculate number of steps for this fraction
     n_fit_steps = max(2, int(fit_fraction * n_max))
@@ -251,7 +253,14 @@ def fit_msd_nonlinear_at_fraction(
     
     if tau_fit.size < 3:  # Need at least 3 points for 2-parameter fit
         raise ValueError(f"Insufficient points ({tau_fit.size}) for nonlinear fit at fraction {fit_fraction}")
-    
+
+    # Prepare sigma for weighted fit
+    sigma_fit = None
+    if msd_sigma is not None:
+        sigma_subset = np.asarray(msd_sigma, dtype=float)[mask][valid]
+        if np.all(np.isfinite(sigma_subset) & (sigma_subset > 0)):
+            sigma_fit = sigma_subset
+
     # Perform the fit
     try:
         popt, pcov = curve_fit(
@@ -261,6 +270,7 @@ def fit_msd_nonlinear_at_fraction(
             p0=[D_initial, v_initial],
             bounds=([D_bounds[0], v_bounds[0]], [D_bounds[1], v_bounds[1]]),
             method='trf',
+            **({"sigma": sigma_fit, "absolute_sigma": True} if sigma_fit is not None else {}),
         )
     except RuntimeError as e:
         raise RuntimeError(f"Fitting failed at fraction {fit_fraction}: {e}")
@@ -278,10 +288,13 @@ def fit_msd_nonlinear_at_fraction(
     
     # Calculate metrics
     msd_predicted = nonlinear_msd_model(tau_fit, D_opt, v_opt)
-    R_squared = calculate_r_squared(msd_fit, msd_predicted)
     RSS = calculate_rss(msd_fit, msd_predicted)
-    
-    return D_opt, D_error, v_opt, v_error, pcov, tau_fit, msd_fit, msd_predicted, R_squared, RSS
+    if sigma_fit is not None:
+        chi_squared_red = calculate_reduced_chi_squared(msd_fit, msd_predicted, sigma_fit, n_params=2)
+    else:
+        chi_squared_red = float('nan')
+
+    return D_opt, D_error, v_opt, v_error, pcov, tau_fit, msd_fit, msd_predicted, chi_squared_red, RSS, sigma_fit
 
 
 def fit_msd_nonlinear(
@@ -293,6 +306,7 @@ def fit_msd_nonlinear(
     D_initial: float = 1e-2,
     D_bounds: Tuple[float, float] = (9e-4, 1.5e-1),
     interval_step: float = 0.10,
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> NonlinearFitResult:
     """Fit MSD to nonlinear model testing multiple intervals.
     
@@ -319,42 +333,43 @@ def fit_msd_nonlinear(
     
     # Store results for each fraction
     results: Dict[float, Tuple[float, float, float, float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]] = {}
+    sigma_fits: Dict[float, Optional[np.ndarray]] = {}
     interval_results: Dict[float, Tuple[float, float]] = {}
     
     print(f"\nTesting intervals from {fractions[0]:.0%} to {fractions[-1]:.0%} in {interval_step:.0%} steps...")
     
     for frac in fractions:
         try:
-            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_nonlinear_at_fraction(
+            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2_r, rss, sigma_f = fit_msd_nonlinear_at_fraction(
                 tau, msd, n_max, dt, frac,
                 D_initial, D_bounds,
-                velocity_stats.v_initial, velocity_stats.v_bounds
+                velocity_stats.v_initial, velocity_stats.v_bounds,
+                msd_sigma,
             )
-            results[frac] = (D, D_err, v, v_err, R2, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
-            interval_results[frac] = (R2, rss)
-            print(f"  {frac:4.0%}: R^2 = {R2:.6f}, RSS = {rss:.6e}, D = {D:.6e}, v = {v:.6e}")
+            results[frac] = (D, D_err, v, v_err, chi2_r, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
+            sigma_fits[frac] = sigma_f
+            interval_results[frac] = (chi2_r, rss)
+            print(f"  {frac:4.0%}: chi^2_red = {chi2_r:.4f}, RSS = {rss:.6e}, D = {D:.6e}, v = {v:.6e}")
         except (ValueError, RuntimeError) as e:
             print(f"  {frac:4.0%}: Failed - {e}")
             continue
-    
+
     if len(results) == 0:
         raise RuntimeError("No valid fits obtained across any interval")
-    
-    # Find optimal fraction
-    # Step 1: Find maximum R²
-    max_R2 = max(r[4] for r in results.values())
-    
-    # Step 2: Find all fractions within 0.01 of max R²
-    candidates = [(frac, r) for frac, r in results.items() if r[4] >= max_R2 - 0.01]
-    
-    # Step 3: Among candidates, select minimum RSS
-    optimal_fraction = min(candidates, key=lambda x: x[1][9])[0]
-    
+
+    # Select interval with minimum chi_squared_red (or minimum RSS as fallback)
+    chi_vals = {f: r[4] for f, r in results.items()}
+    if any(np.isfinite(v) for v in chi_vals.values()):
+        optimal_fraction = min((f for f in chi_vals if np.isfinite(chi_vals[f])), key=lambda f: chi_vals[f])
+    else:
+        optimal_fraction = min(results, key=lambda f: results[f][9])
+
     # Extract optimal result
-    D, D_err, v, v_err, R2, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal_fraction]
-    
-    print(f"\nOptimal interval: {optimal_fraction:.0%} (R^2 = {R2:.6f}, RSS = {rss:.6e})")
-    
+    D, D_err, v, v_err, chi2_r, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal_fraction]
+    sigma_f = sigma_fits.get(optimal_fraction)
+
+    print(f"\nOptimal interval: {optimal_fraction:.0%} (chi^2_red = {chi2_r:.4f}, RSS = {rss:.6e})")
+
     return NonlinearFitResult(
         D=D,
         D_error=D_err,
@@ -364,11 +379,12 @@ def fit_msd_nonlinear(
         tau_fit=tau_f,
         msd_fit=msd_f,
         msd_predicted=msd_p,
-        R_squared=R2,
+        chi_squared_red=chi2_r,
         RSS=rss,
         optimal_fraction=optimal_fraction,
         n_fit_steps=n_steps,
         interval_results=interval_results,
+        msd_sigma_fit=sigma_f,
     )
 
 
@@ -570,7 +586,7 @@ Example usage:
     if args.manual_fraction is not None:
         print(f"\nUsing manual fraction: {args.manual_fraction:.0%}")
         try:
-            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_nonlinear_at_fraction(
+            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2_r, rss, sigma_f = fit_msd_nonlinear_at_fraction(
                 tau=msd_result.tau,
                 msd=msd_result.msd,
                 n_max=msd_result.n_max,
@@ -580,11 +596,12 @@ Example usage:
                 D_bounds=tuple(args.D_bounds),
                 v_initial=velocity_stats.v_initial,
                 v_bounds=velocity_stats.v_bounds,
+                msd_sigma=msd_result.msd_sem,
             )
-            
+
             n_steps = int(args.manual_fraction * msd_result.n_max)
-            interval_results = {args.manual_fraction: (R2, rss)}
-            
+            interval_results = {args.manual_fraction: (chi2_r, rss)}
+
             # Create result object
             nonlinear_result = NonlinearFitResult(
                 D=D,
@@ -595,11 +612,12 @@ Example usage:
                 tau_fit=tau_f,
                 msd_fit=msd_f,
                 msd_predicted=msd_p,
-                R_squared=R2,
+                chi_squared_red=chi2_r,
                 RSS=rss,
                 optimal_fraction=args.manual_fraction,
                 n_fit_steps=n_steps,
                 interval_results=interval_results,
+                msd_sigma_fit=sigma_f,
             )
             
         except (ValueError, RuntimeError) as e:
@@ -617,6 +635,7 @@ Example usage:
                 D_initial=args.D_initial,
                 D_bounds=tuple(args.D_bounds),
                 interval_step=args.interval_step,
+                msd_sigma=msd_result.msd_sem,
             )
         except RuntimeError as e:
             print(f"\nError during nonlinear fitting: {e}")
@@ -630,7 +649,7 @@ Example usage:
     print(f"  {interval_label}:            {nonlinear_result.optimal_fraction:.0%} ({nonlinear_result.n_fit_steps} steps)")
     print(f"  Diffusion Coeff (D):       ({nonlinear_result.D:.6e} +/- {nonlinear_result.D_error:.2e}) um^2/s")
     print(f"  Drift Velocity (v):        ({nonlinear_result.v:.6e} +/- {nonlinear_result.v_error:.2e}) um/s")
-    print(f"  R^2:                        {nonlinear_result.R_squared:.6f}")
+    print(f"  chi^2_red:                  {nonlinear_result.chi_squared_red:.6f}")
     print(f"  RSS:                       {nonlinear_result.RSS:.6e}")
     print(f"  Fit tau range:               [{nonlinear_result.tau_fit.min():.2f}, {nonlinear_result.tau_fit.max():.2f}] s")
     print(f"{'='*60}")
@@ -650,12 +669,13 @@ Example usage:
                 fit_fraction=0.10,
                 D_initial=args.D_initial,
                 D_bounds=tuple(args.D_bounds),
+                msd_sigma=msd_result.msd_sem,
             )
-            
+
             print(f"\nD with linear model (MSD = 4D*tau) is:        ({linear_result.D:.6e} +/- {linear_result.D_error:.2e}) um^2/s")
             print(f"D with non-linear model (MSD = 4D*tau + v^2*tau^2) is: ({nonlinear_result.D:.6e} +/- {nonlinear_result.D_error:.2e}) um^2/s")
-            print(f"\nLinear fit R^2:     {linear_result.R_squared:.6f}")
-            print(f"Nonlinear fit R^2:  {nonlinear_result.R_squared:.6f}")
+            print(f"\nLinear fit chi^2_red:    {linear_result.chi_squared_red:.6f}")
+            print(f"Nonlinear fit chi^2_red: {nonlinear_result.chi_squared_red:.6f}")
             print(f"{'='*60}")
             
         except Exception as e:
@@ -672,10 +692,11 @@ Example usage:
         D_error=nonlinear_result.D_error,
         v=nonlinear_result.v,
         v_error=nonlinear_result.v_error,
-        R_squared=nonlinear_result.R_squared,
+        chi_squared_red=nonlinear_result.chi_squared_red,
         output_path=plot_filename,
         optimal_fraction=nonlinear_result.optimal_fraction,
-        n_fit_steps=nonlinear_result.n_fit_steps
+        n_fit_steps=nonlinear_result.n_fit_steps,
+        msd_sigma=nonlinear_result.msd_sigma_fit,
     )
 
     print(f"\nNonlinear fitting analysis complete!")

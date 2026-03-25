@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,10 +40,11 @@ def plot_msd_with_nonlinear_fit(
     D_error: float,
     v: float,
     v_error: float,
-    R_squared: float,
+    chi_squared_red: float,
     output_path: Path,
     optimal_fraction: float = 0.10,
     n_fit_steps: int = 0,
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> None:
     """Create and save a plot of MSD data with nonlinear fit.
     
@@ -56,16 +58,21 @@ def plot_msd_with_nonlinear_fit(
         D_error: Standard error on D
         v: Fitted drift velocity [um/s]
         v_error: Standard error on v
-        R_squared: Coefficient of determination
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         output_path: Path to save the figure
         optimal_fraction: Optimal fraction of data used for fitting
         n_fit_steps: Number of lag steps used for fitting
+        msd_sigma: SEM values for error bars (same length as tau_fit)
     """
     fig, ax = plt.subplots(figsize=(8, 6))
     
     # Plot ONLY the data points used in the fit
-    ax.plot(tau_fit, msd_fit, 'o', color='C0', markersize=8, 
-            alpha=0.7, label='MSD Data', zorder=2)
+    if msd_sigma is not None:
+        ax.errorbar(tau_fit, msd_fit, yerr=msd_sigma, fmt='o', color='C0', markersize=8,
+                    alpha=0.7, capsize=4, capthick=1.2, elinewidth=1.2, label='MSD Data', zorder=2)
+    else:
+        ax.plot(tau_fit, msd_fit, 'o', color='C0', markersize=8,
+                alpha=0.7, label='MSD Data', zorder=2)
     
     # Plot the fitted line (over the same range)
     ax.plot(tau_fit, msd_fit_line, '-', color='C3', linewidth=2.5,
@@ -85,7 +92,7 @@ def plot_msd_with_nonlinear_fit(
     textstr = '\n'.join([
         r'$D = (%.2e \pm %.1e)\ \mu m^2/s$' % (D, D_error),
         r'$v = (%.2e \pm %.1e)\ \mu m/s$' % (v, v_error),
-        r'$R^2 = %.4f$' % R_squared,
+        r'$\chi^2_\nu = %.4f$' % chi_squared_red,
     ])
     
     # Place text box in upper right with white background
@@ -108,10 +115,11 @@ def plot_msd_with_fit(
     msd_fit_line: np.ndarray,
     D: float,
     D_error: float,
-    R_squared: float,
+    chi_squared_red: float,
     output_path: Path,
     fit_fraction: float = 0.10,
     n_fit_steps: int = 0,
+    msd_sigma: Optional[np.ndarray] = None,
 ) -> None:
     """Create and save a plot of MSD data with linear fit.
     
@@ -123,16 +131,21 @@ def plot_msd_with_fit(
         msd_fit_line: Fitted MSD values (model predictions)
         D: Fitted Diffusion Coefficient
         D_error: Standard error on D
-        R_squared: Coefficient of determination
+        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit
         output_path: Path to save the figure
         fit_fraction: Fraction of data used for fitting
         n_fit_steps: Number of lag steps used for fitting
+        msd_sigma: SEM values for error bars (same length as tau_fit)
     """
     fig, ax = plt.subplots(figsize=(8, 6))
     
     # Plot ONLY the data points used in the fit
-    ax.plot(tau_fit, msd_fit, 'o', color='C0', markersize=8, 
-            alpha=0.7, label='MSD Data', zorder=2)
+    if msd_sigma is not None:
+        ax.errorbar(tau_fit, msd_fit, yerr=msd_sigma, fmt='o', color='C0', markersize=8,
+                    alpha=0.7, capsize=4, capthick=1.2, elinewidth=1.2, label='MSD Data', zorder=2)
+    else:
+        ax.plot(tau_fit, msd_fit, 'o', color='C0', markersize=8,
+                alpha=0.7, label='MSD Data', zorder=2)
     
     # Plot the fitted line (over the same range)
     ax.plot(tau_fit, msd_fit_line, '-', color='C3', linewidth=2.5,
@@ -151,7 +164,7 @@ def plot_msd_with_fit(
     # Text box with fit results - minimal, white background
     textstr = '\n'.join([
         r'$D = (%.2e \pm %.1e)\ \mu m^2/s$' % (D, D_error),
-        r'$R^2 = %.4f$' % R_squared,
+        r'$\chi^2_\nu = %.4f$' % chi_squared_red,
     ])
     
     # Place text box in upper right with white background
@@ -271,6 +284,7 @@ Example usage:
             fit_fraction=args.fit_fraction,
             D_initial=args.D_initial,
             D_bounds=tuple(args.D_bounds),
+            msd_sigma=result.msd_sem,
         )
     except (ValueError, RuntimeError) as e:
         print(f"\nError during fitting: {e}")
@@ -281,7 +295,7 @@ Example usage:
     print(f"Fit Results:")
     print(f"{'='*60}")
     print(f"  Diffusion Coefficient (D): ({fit_result.D:.6e} +/- {fit_result.D_error:.2e}) um^2/s")
-    print(f"  R^2 (coefficient of determination): {fit_result.R_squared:.6f}")
+    print(f"  chi^2_red:                          {fit_result.chi_squared_red:.6f}")
     print(f"  Points used in fit: {fit_result.tau_fit.size}")
     print(f"  Fit tau range: [{fit_result.tau_fit.min():.2f}, {fit_result.tau_fit.max():.2f}] s")
     print(f"{'='*60}\n")
@@ -296,10 +310,11 @@ Example usage:
         msd_fit_line=fit_result.msd_predicted,
         D=fit_result.D,
         D_error=fit_result.D_error,
-        R_squared=fit_result.R_squared,
+        chi_squared_red=fit_result.chi_squared_red,
         output_path=output_path,
         fit_fraction=args.fit_fraction,
         n_fit_steps=n_fit_steps,
+        msd_sigma=fit_result.msd_sigma_fit,
     )
     
     print("\nAnalysis complete!")
@@ -419,7 +434,7 @@ Example usage:
         # Use manual fraction
         print(f"Using manual fraction: {args.manual_fraction:.0%}")
         try:
-            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, R2, rss = fit_msd_nonlinear_at_fraction(
+            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2_r, rss, sigma_f = fit_msd_nonlinear_at_fraction(
                 tau=msd_result.tau,
                 msd=msd_result.msd,
                 n_max=msd_result.n_max,
@@ -429,6 +444,7 @@ Example usage:
                 D_bounds=tuple(args.D_bounds),
                 v_initial=velocity_stats.v_initial,
                 v_bounds=velocity_stats.v_bounds,
+                msd_sigma=msd_result.msd_sem,
             )
             
             n_steps = int(args.manual_fraction * msd_result.n_max)
@@ -443,11 +459,12 @@ Example usage:
                 tau_fit=tau_f,
                 msd_fit=msd_f,
                 msd_predicted=msd_p,
-                R_squared=R2,
+                chi_squared_red=chi2_r,
                 RSS=rss,
                 optimal_fraction=args.manual_fraction,
                 n_fit_steps=n_steps,
-                interval_results={args.manual_fraction: (R2, rss)},
+                interval_results={args.manual_fraction: (chi2_r, rss)},
+                msd_sigma_fit=sigma_f,
             )
             
         except (ValueError, RuntimeError) as e:
@@ -464,6 +481,7 @@ Example usage:
             D_initial=args.D_initial,
             D_bounds=tuple(args.D_bounds),
             interval_step=args.interval_step,
+            msd_sigma=msd_result.msd_sem,
         )
     
     # Create plot
@@ -480,10 +498,11 @@ Example usage:
         D_error=nonlinear_result.D_error,
         v=nonlinear_result.v,
         v_error=nonlinear_result.v_error,
-        R_squared=nonlinear_result.R_squared,
+        chi_squared_red=nonlinear_result.chi_squared_red,
         output_path=output_path,
         optimal_fraction=nonlinear_result.optimal_fraction,
         n_fit_steps=nonlinear_result.n_fit_steps,
+        msd_sigma=nonlinear_result.msd_sigma_fit,
     )
     
     print("\nNonlinear plot complete!")
