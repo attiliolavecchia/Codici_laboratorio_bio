@@ -253,26 +253,10 @@ def estimate_global_time_step(trajectories: Mapping[Union[int, str], Trajectory]
     return float(np.median(np.asarray(dt_values, dtype=float)))
 
 
-def read_trajectories(
-    csv_path: str,
-    encoding: Optional[str] = None,
-    on_bad_lines: str = "error",
-) -> Dict[Union[int, str], Trajectory]:
-    """Backward-compatible alias for ``read_trajectories_from_csv``."""
-    return read_trajectories_from_csv(csv_path, encoding=encoding, on_bad_lines=on_bad_lines)
-
-
-def estimate_global_dt(trajectories: Mapping[Union[int, str], Trajectory]) -> float:
-    """Backward-compatible alias for ``estimate_global_time_step``."""
-    return estimate_global_time_step(trajectories)
-
-
 __all__ = [
     "Trajectory",
     "read_trajectories_from_csv",
-    "read_trajectories",
     "estimate_global_time_step",
-    "estimate_global_dt",
     "normalize_and_select_required_columns",
     "coerce_required_column_dtypes",
     "REQUIRED_COLUMNS",

@@ -202,34 +202,32 @@ EAMSD_DIRNAME = "eamsd_plots"
 TAMSD_DIRNAME = "tamsd_plots"
 
 
-def plot_overlaid_eamsd(curves: List[MSDCurves], out_path: Path) -> None:
+def _plot_overlaid(curves: List[MSDCurves], out_path: Path, *,
+                   tau_attr: str, msd_attr: str, marker: str,
+                   ylabel: str, legend_title: str) -> None:
+    """Plot multiple MSD curves on one figure."""
     plt.figure(figsize=(8.0, 5.2))
     for i, c in enumerate(curves):
         color = COLORS[i % len(COLORS)]
-        plt.plot(c.e_tau_s, c.e_msd, marker="o", ms=3.5, lw=1.5, color=color, label=c.label)
+        plt.plot(getattr(c, tau_attr), getattr(c, msd_attr),
+                 marker=marker, ms=3.5, lw=1.5, color=color, label=c.label)
     plt.xlabel("Time Lag (τ) [seconds]")
-    plt.ylabel("EA-MSD")
-    #plt.title("Ensemble-Averaged MSD")
+    plt.ylabel(ylabel)
     plt.grid(True, linestyle=":", alpha=0.5)
-    plt.legend(title="Trajectories")
+    plt.legend(title=legend_title)
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
+
+
+def plot_overlaid_eamsd(curves: List[MSDCurves], out_path: Path) -> None:
+    _plot_overlaid(curves, out_path, tau_attr="e_tau_s", msd_attr="e_msd",
+                   marker="o", ylabel="EA-MSD", legend_title="Trajectories")
 
 
 def plot_overlaid_tamsd(curves: List[MSDCurves], out_path: Path) -> None:
-    plt.figure(figsize=(8.0, 5.2))
-    for i, c in enumerate(curves):
-        color = COLORS[i % len(COLORS)]
-        plt.plot(c.t_tau_s, c.t_msd, marker="s", ms=3.5, lw=1.5, color=color, label=c.label)
-    plt.xlabel("Time Lag (τ) [seconds]")
-    plt.ylabel("TA-MSD")
-    #plt.title("Time-Averaged MSD")
-    plt.grid(True, linestyle=":", alpha=0.5)
-    plt.legend(title="Truncation length")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
-    plt.close()
+    _plot_overlaid(curves, out_path, tau_attr="t_tau_s", msd_attr="t_msd",
+                   marker="s", ylabel="TA-MSD", legend_title="Truncation length")
 
 
 def _format_fraction(f: float | None) -> str:

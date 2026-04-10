@@ -13,32 +13,24 @@
 /2_Fotoni/*
 
 # Allow only these Python files in Confocale
-!/Confocale/tamsd_plot.py
+#!/Confocale/tamsd_plot.py
 !/Confocale/data_reader.py
 !/Confocale/msd_analyzer.py
-!/Confocale/eamsd_plot.py
-!/Confocale/guide.md
+#!/Confocale/eamsd_plot.py
+#!/Confocale/guide.md
 !/Confocale/compare_msd.py
-!/Confocale/plot_msd_fit.py
+#!/Confocale/plot_msd_fit.py
 !/Confocale/msd_fitting.py
-!/Confocale/msd_fitting_nonlinear.py
-!/Confocale/msd_fitting_anomalous.py
-!/Confocale/msd_fitting_anomalous_drift.py
-!/Confocale/run_fits_with_errors.py
-!/Confocale/run_msd_plots.py
+#!/Confocale/msd_fitting_nonlinear.py
+#!/Confocale/msd_fitting_anomalous.py
+#!/Confocale/msd_fitting_anomalous_drift.py
+#!/Confocale/run_fits_with_errors.py
+#!/Confocale/run_msd_plots.py
+!/Confocale/fit_msd.py
+!/Confocale/plot_msd.py
+!/Confocale/run_all.py
+!/Confocale/README.md
 
-# Keep the Docu folder itself so we can selectively include files inside it
-!/Confocale/Docu/
-/Confocale/Docu/*
-
-# Allow only these files in Docu
-!Confocale//Docu/COMPLETE_USER_GUIDE.md
-!Confocale/Docu/OVERVIEW.md
-!Confocale/Docu/DATA_ANALYSIS_CORE.md
-!Confocale/Docu/COMPARISON_ANALYSIS.md
-!Confocale/Docu/MSD_FITTING.md
-!Confocale/Docu/SCRIPTS_REFERENCE.md
-!Confocale/Docu/GETTING_STARTED_BEGINNERS.md
 
 !/2_Fotoni/flim_data_reader.py
 !/2_Fotoni/flim_exponential_fit.py

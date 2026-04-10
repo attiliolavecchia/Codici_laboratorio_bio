@@ -250,7 +250,10 @@ def calculate_time_averaged_msd_per_track(
         if vals.size >= 2:
             std = float(np.std(vals, ddof=1))
             tamsd_std[n - 1] = std
-            tamsd_sem[n - 1] = std / np.sqrt(float(vals.size))
+            # Due to overlapping windows, the effective number of independent samples
+            # is roughly the total windows divided by the lag step n.
+            n_eff = max(1.0, float(vals.size) / n)
+            tamsd_sem[n - 1] = std / np.sqrt(n_eff)
 
     tracks_per_lag = np.ones(K, dtype=int)
 
@@ -329,12 +332,6 @@ def MSDEmptyResult() -> MSDResult:
     )
 
 
-def run_from_csv(csv_path: str, max_lag_fraction: Optional[float] = None) -> MSDResult:
-    """Convenience function: read trajectories then compute ensemble MSD."""
-    trajectories = read_trajectories_from_csv(csv_path)
-    return calculate_ensemble_msd(trajectories, max_lag_fraction=max_lag_fraction)
-
-
 if __name__ == "__main__":
     import argparse
 
@@ -348,19 +345,11 @@ if __name__ == "__main__":
     )
     args = p.parse_args()
 
-    res = run_from_csv(args.csv, max_lag_fraction=args.max_lag_fraction)
+    trajectories = read_trajectories_from_csv(args.csv)
+    res = calculate_ensemble_msd(trajectories, max_lag_fraction=args.max_lag_fraction)
     print(f"Δt (global) = {res.dt}")
     print(f"n_max (steps) = {res.n_max}, τ_max = {res.tau[-1] if res.tau.size else float('nan')}")
     print(f"Total trajectories (M) = {res.total_trajectories}")
     print(f"Longest trajectory length (points) = {res.longest_trajectory_points}")
     for t, m in zip(res.tau, res.msd):
         print(f"tau={t:.6g}, MSD={m:.6g}")
-
-# Backward-compatible alias for earlier API name
-def compute_ensemble_msd(
-    trajectories: Mapping[Union[int, str], Trajectory],
-    *,
-    max_lag_fraction: float = 0.10,
-    global_dt: Optional[float] = None,
-) -> MSDResult:
-    return calculate_ensemble_msd(trajectories, max_lag_fraction=max_lag_fraction, global_dt=global_dt)

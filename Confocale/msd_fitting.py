@@ -1,23 +1,19 @@
 """
-Linear MSD fitting module for extracting Diffusion Coefficient (D).
+MSD fitting module — all four diffusion models.
 
-This module implements a robust fitting function to extract the Diffusion Coefficient
-from Mean Squared Displacement (MSD) data using the linear model:
-    
-    MSD(τ) = 4D·τ
-    
-where:
-    - MSD is the Mean Squared Displacement
-    - τ (tau) is the time lag
-    - D is the Diffusion Coefficient
+Models:
+    1. Linear:           MSD(τ) = 4D·τ
+    2. Nonlinear (drift): MSD(τ) = 4D·τ + v²·τ²
+    3. Anomalous:        MSD(τ) = 4D_α·τ^α
+    4. Anomalous+drift:  MSD(τ) = 4D_α·τ^α + v²·τ²
 
-The fitting is performed using scipy.optimize.curve_fit with the Levenberg-Marquardt
-algorithm (or Trust Region Reflective when bounds are specified).
+Each model provides:
+    - A model function
+    - A FitResult dataclass
+    - A fit function (with optional interval optimisation for models 2-4)
 
-Physical Context:
-    For particles diffusing in highly viscous media (e.g., 80% Glycerol/Water solution),
-    the expected Diffusion Coefficient is very low, typically in the range of
-    10^-6 to 10^-2 μm²/s.
+Shared utilities: calculate_r_squared, calculate_reduced_chi_squared, calculate_rss,
+    velocity analysis (VelocityStats, compute_trajectory_velocity, analyze_velocities).
 
 Dependencies: numpy, scipy
 """
@@ -25,26 +21,156 @@ Dependencies: numpy, scipy
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple, Union
 
 import numpy as np
 from scipy.optimize import curve_fit
 
+from data_reader import Trajectory
+
+
+# ---------------------------------------------------------------------------
+# Shared utilities
+# ---------------------------------------------------------------------------
+
+def calculate_r_squared(y_observed: np.ndarray, y_predicted: np.ndarray) -> float:
+    """R² = 1 − SS_res / SS_tot."""
+    ss_res = np.sum((y_observed - y_predicted) ** 2)
+    ss_tot = np.sum((y_observed - np.mean(y_observed)) ** 2)
+    if ss_tot == 0:
+        return 0.0
+    return 1.0 - (ss_res / ss_tot)
+
+
+def calculate_reduced_chi_squared(
+    y_observed: np.ndarray,
+    y_predicted: np.ndarray,
+    sigma: np.ndarray,
+    n_params: int,
+) -> float:
+    """χ²_ν = (1/ν) Σ ((y_obs − y_pred) / σ)²  with ν = N − n_params."""
+    nu = len(y_observed) - n_params
+    if nu <= 0:
+        return float("nan")
+    return float(np.sum(((y_observed - y_predicted) / sigma) ** 2) / nu)
+
+
+def calculate_rss(y_observed: np.ndarray, y_predicted: np.ndarray) -> float:
+    """Residual sum of squares: Σ(y_obs − y_pred)²."""
+    return float(np.sum((y_observed - y_predicted) ** 2))
+
+
+# ---------------------------------------------------------------------------
+# Velocity analysis (used by nonlinear and anomalous+drift models)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class VelocityStats:
+    """Statistics of trajectory velocities (v = path_length / duration)."""
+    velocities: np.ndarray
+    mean: float
+    median: float
+    std: float
+    v_initial: float
+    v_bounds: Tuple[float, float]
+    n_trajectories_total: int
+    n_trajectories_used: int
+
+
+def compute_trajectory_velocity(traj: Trajectory) -> float:
+    """v = total_path_length / total_time for a single trajectory."""
+    if traj.n_points < 2:
+        return float("nan")
+    dx = np.diff(traj.x)
+    dy = np.diff(traj.y)
+    total_path = float(np.sum(np.sqrt(dx**2 + dy**2)))
+    duration = float(traj.time[-1] - traj.time[0])
+    if duration <= 0:
+        return float("nan")
+    return total_path / duration
+
+
+def analyze_velocities(
+    trajectories: Mapping[Union[int, str], Trajectory],
+    min_points: int = 30,
+) -> VelocityStats:
+    """Compute velocity statistics from trajectories with ≥ min_points."""
+    n_total = len(trajectories)
+    vels = [
+        v
+        for traj in trajectories.values()
+        if traj.n_points >= min_points
+        for v in [compute_trajectory_velocity(traj)]
+        if np.isfinite(v) and v > 0
+    ]
+    if not vels:
+        raise ValueError(
+            f"No valid trajectories with ≥{min_points} points. Total: {n_total}"
+        )
+    velocities = np.array(vels)
+    mean_v = float(np.mean(velocities))
+    median_v = float(np.median(velocities))
+    std_v = float(np.std(velocities))
+    return VelocityStats(
+        velocities=velocities,
+        mean=mean_v,
+        median=median_v,
+        std=std_v,
+        v_initial=median_v,
+        v_bounds=(0.0, mean_v + 3.0 * std_v),
+        n_trajectories_total=n_total,
+        n_trajectories_used=len(velocities),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helper: select data subset for fitting
+# ---------------------------------------------------------------------------
+
+def _select_fit_data(
+    tau: np.ndarray,
+    msd: np.ndarray,
+    n_max: int,
+    dt: float,
+    fit_fraction: float,
+    min_points: int,
+    msd_sigma: Optional[np.ndarray] = None,
+    require_positive_tau: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Return (tau_fit, msd_fit, sigma_fit) after fraction-based subsetting."""
+    n_fit = max(2, int(fit_fraction * n_max))
+    tau_max = n_fit * dt
+    mask = tau <= tau_max
+    tau_f = tau[mask]
+    msd_f = msd[mask]
+
+    valid = np.isfinite(tau_f) & np.isfinite(msd_f)
+    if require_positive_tau:
+        valid &= tau_f > 0
+    tau_f = tau_f[valid]
+    msd_f = msd_f[valid]
+
+    if tau_f.size < min_points:
+        raise ValueError(
+            f"Insufficient points ({tau_f.size}) for fit at fraction {fit_fraction}"
+        )
+
+    sigma_f = None
+    if msd_sigma is not None:
+        s = np.asarray(msd_sigma, dtype=float)[mask][valid]
+        if np.all(np.isfinite(s) & (s > 0)):
+            sigma_f = s
+
+    return tau_f, msd_f, sigma_f
+
+
+# ===================================================================
+# Model 1 — Linear: MSD = 4D·τ
+# ===================================================================
 
 @dataclass(frozen=True)
 class FitResult:
-    """Container for MSD linear fit results.
-    
-    Attributes:
-        D: Diffusion coefficient in units of (length²/time), e.g., μm²/s
-        D_error: Standard error on D computed from the covariance matrix
-        pcov: Full covariance matrix from the fit
-        tau_fit: Time lag values used in the fit (subset where τ ≤ tau_max)
-        msd_fit: MSD values used in the fit (corresponding to tau_fit)
-        msd_predicted: Predicted MSD values from the fitted model over tau_fit range
-        chi_squared_red: Reduced chi-squared (χ²_ν) for the fit quality (NaN if no sigma provided)
-    """
-    
+    """Result of a linear MSD fit."""
     D: float
     D_error: float
     pcov: np.ndarray
@@ -56,70 +182,8 @@ class FitResult:
 
 
 def linear_msd_model(tau: np.ndarray, D: float) -> np.ndarray:
-    """Linear MSD model: MSD(τ) = 4D·τ (for 2D motion)
-    
-    Args:
-        tau: Time lag values (seconds or appropriate time units)
-        D: Diffusion coefficient (length²/time units)
-    
-    Returns:
-        MSD values predicted by the model
-    """
+    """MSD(τ) = 4D·τ"""
     return 4.0 * D * tau
-
-
-def calculate_r_squared(y_observed: np.ndarray, y_predicted: np.ndarray) -> float:
-    """Calculate the coefficient of determination (R²).
-    
-    R² = 1 - (SS_res / SS_tot)
-    
-    where:
-        SS_res = Σ(y_observed - y_predicted)²  (residual sum of squares)
-        SS_tot = Σ(y_observed - y_mean)²       (total sum of squares)
-    
-    Args:
-        y_observed: Observed data values
-        y_predicted: Predicted values from the model
-    
-    Returns:
-        R² value (1.0 = perfect fit, lower values indicate worse fit)
-    """
-    ss_res = np.sum((y_observed - y_predicted) ** 2)
-    ss_tot = np.sum((y_observed - np.mean(y_observed)) ** 2)
-    
-    # Avoid division by zero
-    if ss_tot == 0:
-        return 0.0
-    
-    return 1.0 - (ss_res / ss_tot)
-
-
-def calculate_reduced_chi_squared(
-    y_observed: np.ndarray,
-    y_predicted: np.ndarray,
-    sigma: np.ndarray,
-    n_params: int,
-) -> float:
-    """Calculate the reduced chi-squared statistic.
-
-    χ²_ν = (1/ν) · Σ((y_observed - y_predicted)² / σ²)
-
-    where ν = N - n_params is the number of degrees of freedom.
-    A value near 1 indicates the model fits the data well within the uncertainties.
-
-    Args:
-        y_observed: Observed data values
-        y_predicted: Predicted values from the model
-        sigma: Uncertainties on y_observed (e.g., SEM of EA-MSD)
-        n_params: Number of free parameters in the model
-
-    Returns:
-        Reduced chi-squared value (χ²_ν). Returns nan if ν ≤ 0.
-    """
-    nu = len(y_observed) - n_params
-    if nu <= 0:
-        return float('nan')
-    return float(np.sum(((y_observed - y_predicted) / sigma) ** 2) / nu)
 
 
 def fit_msd_linear(
@@ -132,172 +196,359 @@ def fit_msd_linear(
     D_bounds: Tuple[float, float] = (1e-6, 10.0),
     msd_sigma: Optional[np.ndarray] = None,
 ) -> FitResult:
-    """Fit MSD data to linear model MSD(τ) = 4D·τ using Levenberg-Marquardt algorithm.
-    
-    This function performs a partial fit on the first portion of the MSD data,
-    corresponding to the short-time linear diffusion regime. From theory, the
-    first ~10% of lag steps exhibit purely linear behavior before confinement
-    or other effects cause deviations.
-    
-    Physical Constraints:
-        For 240nm particles in 85% glycerol/water solution at room temperature,
-        using the Stokes-Einstein relation D = kT/(6πηr), the expected diffusion
-        coefficient is approximately 0.006-0.009 μm²/s. However, experimental
-        observations show higher values (~0.14 μm²/s), possibly due to:
-        - Lower actual glycerol concentration
-        - Higher temperature
-        - Active transport or convective flows
-        The default bounds [1e-6, 10.0] are wide to accommodate various experimental conditions.
-    
-    Algorithm:
-        Uses scipy.optimize.curve_fit which automatically selects:
-        - 'lm' (Levenberg-Marquardt) for unconstrained problems
-        - 'trf' (Trust Region Reflective) when bounds are specified
-    
-    Args:
-        tau: Array of time lag values (must be in seconds or consistent time units)
-        msd: Array of MSD values (must be in length² units, e.g., μm²)
-        n_max: Maximum number of lag steps available
-        dt: Time step (seconds)
-        fit_fraction: Fraction of n_max to use for fitting (default: 0.10 = 10%)
-        D_initial: Initial guess for the Diffusion Coefficient (default: 1e-2 μm²/s)
-        D_bounds: Tuple (lower, upper) bounds for D (default: (1e-6, 10.0) μm²/s)
-    
-    Returns:
-        FitResult containing:
-            - D: Optimal Diffusion Coefficient
-            - D_error: Standard error on D
-            - pcov: Covariance matrix
-            - tau_fit, msd_fit: Data subset used for fitting
-            - msd_predicted: Model predictions for tau_fit
-            - chi_squared_red: Goodness of fit metric (reduced chi-squared)
-    
-    Raises:
-        ValueError: If input arrays are incompatible or insufficient data for fitting
-        RuntimeError: If the optimization fails to converge
-    """
-    # Input validation
+    """Fit MSD to linear model using the first *fit_fraction* of lag steps."""
     tau = np.asarray(tau, dtype=float)
     msd = np.asarray(msd, dtype=float)
-    
-    if tau.shape != msd.shape:
-        raise ValueError(f"tau and msd must have the same shape. Got tau: {tau.shape}, msd: {msd.shape}")
-    
-    if tau.size == 0:
-        raise ValueError("Input arrays are empty")
-    
-    # Validate fraction
+    if tau.shape != msd.shape or tau.size == 0:
+        raise ValueError("tau and msd must be non-empty arrays of the same shape")
     if not (0 < fit_fraction <= 1.0):
         raise ValueError(f"fit_fraction must be in (0, 1], got {fit_fraction}")
-    
-    # Calculate number of steps to use for fitting (first fit_fraction of n_max)
-    n_fit_steps = max(2, int(fit_fraction * n_max))
-    tau_max = n_fit_steps * dt
-    
-    # Select data subset for fitting: first n_fit_steps
-    # Since tau = n * dt, we use tau <= tau_max
-    mask = tau <= tau_max
-    tau_fit = tau[mask]
-    msd_fit = msd[mask]
-    
-    if tau_fit.size == 0:
-        raise ValueError(f"No data points in fitting range (first {fit_fraction:.0%} = {n_fit_steps} steps)")
-    
-    if tau_fit.size < 2:
-        raise ValueError(f"Need at least 2 data points for fitting, got {tau_fit.size}")
-    
-    # Remove any NaN or infinite values
-    valid = np.isfinite(tau_fit) & np.isfinite(msd_fit)
-    tau_fit = tau_fit[valid]
-    msd_fit = msd_fit[valid]
-    
-    if tau_fit.size < 2:
-        raise ValueError("Insufficient valid (finite) data points after filtering")
 
-    # Prepare sigma for weighted fit
-    sigma_fit = None
-    if msd_sigma is not None:
-        sigma_subset = np.asarray(msd_sigma, dtype=float)[mask][valid]
-        if np.all(np.isfinite(sigma_subset) & (sigma_subset > 0)):
-            sigma_fit = sigma_subset
+    tau_f, msd_f, sigma_f = _select_fit_data(
+        tau, msd, n_max, dt, fit_fraction, min_points=2, msd_sigma=msd_sigma,
+    )
 
-    # Validate bounds
-    D_lower, D_upper = D_bounds
-    if D_lower <= 0:
-        raise ValueError(f"Lower bound for D must be positive, got {D_lower}")
-    if D_upper <= D_lower:
-        raise ValueError(f"Upper bound must be greater than lower bound: ({D_lower}, {D_upper})")
-    if not (D_lower <= D_initial <= D_upper):
-        raise ValueError(f"Initial guess D_initial={D_initial} must be within bounds ({D_lower}, {D_upper})")
-    
-    # Perform the fit
-    # When bounds are provided, scipy automatically uses 'trf' method instead of 'lm'
-    try:
-        popt, pcov = curve_fit(
-            linear_msd_model,
-            tau_fit,
-            msd_fit,
-            p0=[D_initial],
-            bounds=([D_lower], [D_upper]),
-            method='trf',  # Trust Region Reflective handles bounds well
-            **({"sigma": sigma_fit, "absolute_sigma": True} if sigma_fit is not None else {}),
-        )
-    except RuntimeError as e:
-        raise RuntimeError(f"Curve fitting failed: {e}")
-    
-    # Extract results
-    D_optimal = float(popt[0])
-    
-    # Calculate standard error on D from covariance matrix
-    # perr = sqrt(diag(pcov))
-    if pcov is not None and np.all(np.isfinite(pcov)):
-        D_error = float(np.sqrt(pcov[0, 0]))
-    else:
-        D_error = float('nan')
-        print("Warning: Could not estimate error on D from covariance matrix")
-    
-    # Calculate predicted values and goodness-of-fit
-    msd_predicted = linear_msd_model(tau_fit, D_optimal)
-    if sigma_fit is not None:
-        chi_squared_red = calculate_reduced_chi_squared(msd_fit, msd_predicted, sigma_fit, n_params=1)
-    else:
-        chi_squared_red = float('nan')
+    popt, pcov = curve_fit(
+        linear_msd_model, tau_f, msd_f,
+        p0=[D_initial],
+        bounds=([D_bounds[0]], [D_bounds[1]]),
+        method="trf",
+        **({"sigma": sigma_f, "absolute_sigma": True} if sigma_f is not None else {}),
+    )
+
+    D_opt = float(popt[0])
+    D_err = float(np.sqrt(pcov[0, 0])) if pcov is not None and np.all(np.isfinite(pcov)) else float("nan")
+    msd_pred = linear_msd_model(tau_f, D_opt)
+    chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 1) if sigma_f is not None else float("nan")
 
     return FitResult(
-        D=D_optimal,
-        D_error=D_error,
-        pcov=pcov,
-        tau_fit=tau_fit,
-        msd_fit=msd_fit,
-        msd_predicted=msd_predicted,
-        chi_squared_red=chi_squared_red,
-        msd_sigma_fit=sigma_fit,
+        D=D_opt, D_error=D_err, pcov=pcov,
+        tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_pred,
+        chi_squared_red=chi2, msd_sigma_fit=sigma_f,
     )
 
 
-if __name__ == "__main__":
-    # Quick test with synthetic data
-    print("Testing fit_msd_linear with synthetic data...")
-    
-    # Generate synthetic data: D_true = 5e-4 μm²/s
-    D_true = 5e-4
-    tau_test = np.linspace(0.1, 20, 50)
-    msd_test = linear_msd_model(tau_test, D_true)
-    
-    # Add some noise
-    rng = np.random.default_rng(42)
-    noise = 0.05 * msd_test * rng.normal(size=msd_test.shape)
-    msd_test_noisy = msd_test + noise
-    
-    # Fit the data
-    n_max_test = len(tau_test)
-    dt_test = float(tau_test[1] - tau_test[0])
-    sigma_test = 0.05 * np.abs(msd_test) + 1e-6  # synthetic SEM proportional to MSD
-    result = fit_msd_linear(tau_test, msd_test_noisy, n_max=n_max_test, dt=dt_test, msd_sigma=sigma_test)
-    
-    print(f"\nTrue D: {D_true:.6e} μm²/s")
-    print(f"Fitted D: {result.D:.6e} ± {result.D_error:.6e} μm²/s")
-    print(f"chi^2_red: {result.chi_squared_red:.6f}")
-    print(f"Points used in fit: {result.tau_fit.size}")
-    print(f"Fit range: τ = [{result.tau_fit.min():.2f}, {result.tau_fit.max():.2f}] s")
-    print("\nTest passed!")
+# ===================================================================
+# Model 2 — Nonlinear (drift): MSD = 4D·τ + v²·τ²
+# ===================================================================
+
+@dataclass(frozen=True)
+class NonlinearFitResult:
+    """Result of a nonlinear (drift) MSD fit."""
+    D: float
+    D_error: float
+    v: float
+    v_error: float
+    pcov: np.ndarray
+    tau_fit: np.ndarray
+    msd_fit: np.ndarray
+    msd_predicted: np.ndarray
+    chi_squared_red: float
+    RSS: float
+    optimal_fraction: float
+    n_fit_steps: int
+    interval_results: Dict[float, Tuple[float, float]]
+    msd_sigma_fit: Optional[np.ndarray] = None
+
+
+def nonlinear_msd_model(tau: np.ndarray, D: float, v: float) -> np.ndarray:
+    """MSD(τ) = 4D·τ + v²·τ²"""
+    return 4.0 * D * tau + v**2 * tau**2
+
+
+def _fit_nonlinear_at_fraction(
+    tau, msd, n_max, dt, frac,
+    D_initial, D_bounds, v_initial, v_bounds,
+    msd_sigma,
+):
+    tau_f, msd_f, sigma_f = _select_fit_data(
+        tau, msd, n_max, dt, frac, min_points=3, msd_sigma=msd_sigma,
+    )
+    popt, pcov = curve_fit(
+        nonlinear_msd_model, tau_f, msd_f,
+        p0=[D_initial, v_initial],
+        bounds=([D_bounds[0], v_bounds[0]], [D_bounds[1], v_bounds[1]]),
+        method="trf",
+        **({"sigma": sigma_f, "absolute_sigma": True} if sigma_f is not None else {}),
+    )
+    D, v = float(popt[0]), float(popt[1])
+    D_err = float(np.sqrt(pcov[0, 0])) if np.all(np.isfinite(pcov)) else float("nan")
+    v_err = float(np.sqrt(pcov[1, 1])) if np.all(np.isfinite(pcov)) else float("nan")
+    msd_pred = nonlinear_msd_model(tau_f, D, v)
+    rss = calculate_rss(msd_f, msd_pred)
+    chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 2) if sigma_f is not None else float("nan")
+    return D, D_err, v, v_err, pcov, tau_f, msd_f, msd_pred, chi2, rss, sigma_f
+
+
+def fit_msd_nonlinear(
+    tau: np.ndarray,
+    msd: np.ndarray,
+    n_max: int,
+    dt: float,
+    velocity_stats: VelocityStats,
+    D_initial: float = 1e-2,
+    D_bounds: Tuple[float, float] = (9e-4, 1.5e-1),
+    interval_step: float = 0.10,
+    msd_sigma: Optional[np.ndarray] = None,
+) -> NonlinearFitResult:
+    """Fit nonlinear model testing intervals from 10 % to 90 %, pick best χ²_ν."""
+    fractions = np.arange(interval_step, 1.0, interval_step)
+    results: Dict[float, tuple] = {}
+    sigma_fits: Dict[float, Optional[np.ndarray]] = {}
+    interval_results: Dict[float, Tuple[float, float]] = {}
+
+    print(f"\nTesting intervals {fractions[0]:.0%}–{fractions[-1]:.0%} …")
+    for frac in fractions:
+        try:
+            D, D_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2, rss, sig = _fit_nonlinear_at_fraction(
+                tau, msd, n_max, dt, frac, D_initial, D_bounds,
+                velocity_stats.v_initial, velocity_stats.v_bounds, msd_sigma,
+            )
+            results[frac] = (D, D_err, v, v_err, chi2, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
+            sigma_fits[frac] = sig
+            interval_results[frac] = (chi2, rss)
+            print(f"  {frac:4.0%}: χ²_ν={chi2:.4f}, RSS={rss:.3e}, D={D:.3e}, v={v:.3e}")
+        except (ValueError, RuntimeError) as e:
+            print(f"  {frac:4.0%}: Failed – {e}")
+
+    if not results:
+        raise RuntimeError("No valid fits across any interval")
+
+    optimal = _pick_best(results, chi_idx=4, rss_idx=9)
+    D, D_err, v, v_err, chi2, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal]
+    print(f"\nOptimal: {optimal:.0%} (χ²_ν={chi2:.4f})")
+
+    return NonlinearFitResult(
+        D=D, D_error=D_err, v=v, v_error=v_err, pcov=pcov,
+        tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_p,
+        chi_squared_red=chi2, RSS=rss,
+        optimal_fraction=optimal, n_fit_steps=n_steps,
+        interval_results=interval_results, msd_sigma_fit=sigma_fits.get(optimal),
+    )
+
+
+# ===================================================================
+# Model 3 — Anomalous: MSD = 4D_α·τ^α
+# ===================================================================
+
+@dataclass(frozen=True)
+class AnomalousFitResult:
+    """Result of an anomalous MSD fit (no drift)."""
+    D_alpha: float
+    D_alpha_error: float
+    alpha: float
+    alpha_error: float
+    pcov: np.ndarray
+    tau_fit: np.ndarray
+    msd_fit: np.ndarray
+    msd_predicted: np.ndarray
+    chi_squared_red: float
+    RSS: float
+    optimal_fraction: float
+    n_fit_steps: int
+    interval_results: Dict[float, Tuple[float, float]]
+
+
+def anomalous_msd_model(tau: np.ndarray, D_alpha: float, alpha: float) -> np.ndarray:
+    """MSD(τ) = 4D_α·τ^α"""
+    return 4.0 * D_alpha * np.power(tau, alpha)
+
+
+def _fit_anomalous_at_fraction(
+    tau, msd, n_max, dt, frac,
+    D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds,
+    msd_sigma,
+):
+    tau_f, msd_f, sigma_f = _select_fit_data(
+        tau, msd, n_max, dt, frac, min_points=3, msd_sigma=msd_sigma,
+        require_positive_tau=True,
+    )
+    popt, pcov = curve_fit(
+        anomalous_msd_model, tau_f, msd_f,
+        p0=[D_alpha_initial, alpha_initial],
+        bounds=([D_alpha_bounds[0], alpha_bounds[0]], [D_alpha_bounds[1], alpha_bounds[1]]),
+        method="trf", maxfev=5000,
+        **({"sigma": sigma_f, "absolute_sigma": True} if sigma_f is not None else {}),
+    )
+    Da, a = float(popt[0]), float(popt[1])
+    Da_err = float(np.sqrt(pcov[0, 0])) if np.all(np.isfinite(pcov)) else float("nan")
+    a_err = float(np.sqrt(pcov[1, 1])) if np.all(np.isfinite(pcov)) else float("nan")
+    msd_pred = anomalous_msd_model(tau_f, Da, a)
+    rss = calculate_rss(msd_f, msd_pred)
+    chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 2) if sigma_f is not None else float("nan")
+    return Da, Da_err, a, a_err, pcov, tau_f, msd_f, msd_pred, chi2, rss
+
+
+def fit_msd_anomalous(
+    tau: np.ndarray,
+    msd: np.ndarray,
+    n_max: int,
+    dt: float,
+    D_alpha_initial: float = 1e-2,
+    D_alpha_bounds: Tuple[float, float] = (1e-6, 1e2),
+    alpha_initial: float = 1.0,
+    alpha_bounds: Tuple[float, float] = (0.01, 2.0),
+    interval_step: float = 0.10,
+    msd_sigma: Optional[np.ndarray] = None,
+) -> AnomalousFitResult:
+    """Fit anomalous model testing intervals 10 %–90 %, pick best χ²_ν."""
+    fractions = np.arange(interval_step, 1.0, interval_step)
+    results: Dict[float, tuple] = {}
+    interval_results: Dict[float, Tuple[float, float]] = {}
+
+    print(f"\nTesting intervals {fractions[0]:.0%}–{fractions[-1]:.0%} …")
+    for frac in fractions:
+        try:
+            Da, Da_err, a, a_err, pcov, tau_f, msd_f, msd_p, chi2, rss = _fit_anomalous_at_fraction(
+                tau, msd, n_max, dt, frac,
+                D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds, msd_sigma,
+            )
+            results[frac] = (Da, Da_err, a, a_err, chi2, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
+            interval_results[frac] = (chi2, rss)
+            print(f"  {frac:4.0%}: χ²_ν={chi2:.4f}, RSS={rss:.3e}, D_α={Da:.3e}, α={a:.4f}")
+        except (ValueError, RuntimeError) as e:
+            print(f"  {frac:4.0%}: Failed – {e}")
+
+    if not results:
+        raise RuntimeError("No valid fits across any interval")
+
+    optimal = _pick_best(results, chi_idx=4, rss_idx=9)
+    Da, Da_err, a, a_err, chi2, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal]
+    print(f"\nOptimal: {optimal:.0%} (χ²_ν={chi2:.4f})")
+
+    return AnomalousFitResult(
+        D_alpha=Da, D_alpha_error=Da_err, alpha=a, alpha_error=a_err, pcov=pcov,
+        tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_p,
+        chi_squared_red=chi2, RSS=rss,
+        optimal_fraction=optimal, n_fit_steps=n_steps,
+        interval_results=interval_results,
+    )
+
+
+# ===================================================================
+# Model 4 — Anomalous + drift: MSD = 4D_α·τ^α + v²·τ²
+# ===================================================================
+
+@dataclass(frozen=True)
+class DriftAnomalousFitResult:
+    """Result of an anomalous+drift MSD fit."""
+    D_alpha: float
+    D_alpha_error: float
+    alpha: float
+    alpha_error: float
+    v: float
+    v_error: float
+    pcov: np.ndarray
+    tau_fit: np.ndarray
+    msd_fit: np.ndarray
+    msd_predicted: np.ndarray
+    chi_squared_red: float
+    RSS: float
+    optimal_fraction: float
+    n_fit_steps: int
+    interval_results: Dict[float, Tuple[float, float]]
+
+
+def anomalous_drift_msd_model(tau: np.ndarray, D_alpha: float, alpha: float, v: float) -> np.ndarray:
+    """MSD(τ) = 4D_α·τ^α + v²·τ²"""
+    return 4.0 * D_alpha * np.power(tau, alpha) + v**2 * tau**2
+
+
+def _fit_anomalous_drift_at_fraction(
+    tau, msd, n_max, dt, frac,
+    D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds,
+    v_initial, v_bounds, msd_sigma,
+):
+    tau_f, msd_f, sigma_f = _select_fit_data(
+        tau, msd, n_max, dt, frac, min_points=4, msd_sigma=msd_sigma,
+        require_positive_tau=True,
+    )
+    popt, pcov = curve_fit(
+        anomalous_drift_msd_model, tau_f, msd_f,
+        p0=[D_alpha_initial, alpha_initial, v_initial],
+        bounds=(
+            [D_alpha_bounds[0], alpha_bounds[0], v_bounds[0]],
+            [D_alpha_bounds[1], alpha_bounds[1], v_bounds[1]],
+        ),
+        method="trf", maxfev=10000,
+        **({"sigma": sigma_f, "absolute_sigma": True} if sigma_f is not None else {}),
+    )
+    Da, a, v = float(popt[0]), float(popt[1]), float(popt[2])
+    Da_err = float(np.sqrt(pcov[0, 0])) if np.all(np.isfinite(pcov)) else float("nan")
+    a_err = float(np.sqrt(pcov[1, 1])) if np.all(np.isfinite(pcov)) else float("nan")
+    v_err = float(np.sqrt(pcov[2, 2])) if np.all(np.isfinite(pcov)) else float("nan")
+    msd_pred = anomalous_drift_msd_model(tau_f, Da, a, v)
+    rss = calculate_rss(msd_f, msd_pred)
+    chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 3) if sigma_f is not None else float("nan")
+    return Da, Da_err, a, a_err, v, v_err, pcov, tau_f, msd_f, msd_pred, chi2, rss
+
+
+def fit_msd_anomalous_drift(
+    tau: np.ndarray,
+    msd: np.ndarray,
+    n_max: int,
+    dt: float,
+    velocity_stats: VelocityStats,
+    D_alpha_initial: float = 1e-2,
+    D_alpha_bounds: Tuple[float, float] = (1e-6, 1e2),
+    alpha_initial: float = 1.0,
+    alpha_bounds: Tuple[float, float] = (0.01, 2.0),
+    interval_step: float = 0.10,
+    msd_sigma: Optional[np.ndarray] = None,
+) -> DriftAnomalousFitResult:
+    """Fit anomalous+drift model testing intervals 10 %–90 %, pick best χ²_ν."""
+    fractions = np.arange(interval_step, 1.0, interval_step)
+    results: Dict[float, tuple] = {}
+    interval_results: Dict[float, Tuple[float, float]] = {}
+
+    print(f"\nTesting intervals {fractions[0]:.0%}–{fractions[-1]:.0%} …")
+    for frac in fractions:
+        try:
+            Da, Da_err, a, a_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2, rss = _fit_anomalous_drift_at_fraction(
+                tau, msd, n_max, dt, frac,
+                D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds,
+                velocity_stats.v_initial, velocity_stats.v_bounds, msd_sigma,
+            )
+            results[frac] = (Da, Da_err, a, a_err, v, v_err, chi2, pcov, tau_f, msd_f, msd_p, rss, int(frac * n_max))
+            interval_results[frac] = (chi2, rss)
+            print(f"  {frac:4.0%}: χ²_ν={chi2:.4f}, RSS={rss:.3e}, D_α={Da:.3e}, α={a:.4f}, v={v:.3e}")
+        except (ValueError, RuntimeError) as e:
+            print(f"  {frac:4.0%}: Failed – {e}")
+
+    if not results:
+        raise RuntimeError("No valid fits across any interval")
+
+    optimal = _pick_best_drift(results)
+    Da, Da_err, a, a_err, v, v_err, chi2, pcov, tau_f, msd_f, msd_p, rss, n_steps = results[optimal]
+    print(f"\nOptimal: {optimal:.0%} (χ²_ν={chi2:.4f})")
+
+    return DriftAnomalousFitResult(
+        D_alpha=Da, D_alpha_error=Da_err, alpha=a, alpha_error=a_err,
+        v=v, v_error=v_err, pcov=pcov,
+        tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_p,
+        chi_squared_red=chi2, RSS=rss,
+        optimal_fraction=optimal, n_fit_steps=n_steps,
+        interval_results=interval_results,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal: pick the best interval
+# ---------------------------------------------------------------------------
+
+def _pick_best(results: dict, chi_idx: int, rss_idx: int) -> float:
+    """Select fraction with minimum χ²_ν (fallback: minimum RSS)."""
+    chi_vals = {f: r[chi_idx] for f, r in results.items()}
+    finite = {f: c for f, c in chi_vals.items() if np.isfinite(c)}
+    if finite:
+        return min(finite, key=finite.get)
+    return min(results, key=lambda f: results[f][rss_idx])
+
+
+def _pick_best_drift(results: dict) -> float:
+    """Same logic for the anomalous+drift tuple layout (chi at idx 6, rss at idx 11)."""
+    chi_vals = {f: r[6] for f, r in results.items()}
+    finite = {f: c for f, c in chi_vals.items() if np.isfinite(c)}
+    if finite:
+        return min(finite, key=finite.get)
+    return min(results, key=lambda f: results[f][11])
