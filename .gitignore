@@ -30,6 +30,7 @@
 !/Confocale/plot_msd.py
 !/Confocale/run_all.py
 !/Confocale/README.md
+!/Confocale/check_ergodicity.py
 
 
 !/2_Fotoni/flim_data_reader.py
