@@ -72,6 +72,32 @@ python test_msd_simulation.py
 
 Simulates Brownian motion and anomalous diffusion to verify that MSD computation and fitting recover known parameters.
 
+### `diffusion_statistics.py` — rigorous D extraction and statistics
+
+```
+python diffusion_statistics.py
+```
+
+Extracts the diffusion coefficient D from the non-anomalous dataset using three estimators:
+
+1. **Per-track taMSD** — fits each individual track's time-averaged MSD → distribution of D_i values
+2. **Per-file eaMSD** — fits the ensemble-averaged MSD of each CSV file → one D per file
+3. **Per-file ⟨taMSD⟩** — fits the ensemble-averaged taMSD of each CSV file → one D per file (ergodicity check)
+
+Each estimator is fitted with both linear (`MSD = 4Dτ`) and nonlinear/drift (`MSD = 4Dτ + v²τ²`) models at 10 % and 25 % lag fractions. Compares measured D against the Einstein–Stokes prediction via one-sample t-tests.
+
+Output:
+- `Results/no_anomalous/diffusion_statistics/` — D histograms (SVG) and comparison plot
+- `Results/no_anomalous/linear_fits/` and `nonlinear_fits/` — fit plot SVGs
+- `Docu/diffusion_statistics_results.csv` — summary table
+- `Docu/diffusion_statistics_tamsd_per_track.csv` — per-track D values
+- `Docu/diffusion_statistics_eamsd_per_file.csv` — per-file eaMSD D values
+- `Docu/diffusion_statistics_ens_tamsd_per_file.csv` — per-file ⟨taMSD⟩ D values
+
+### `comp_glycerol_viscosity.py` — theoretical D (Einstein–Stokes)
+
+Computes the theoretical diffusion coefficient using the Cheng 2008 viscosity model for water–glycerol mixtures. Used internally by `diffusion_statistics.py`.
+
 ## Diffusion models
 
 | Model | Equation | Parameters | Dataset |
@@ -95,4 +121,5 @@ Models 2–4 automatically test fit intervals from 10 % to 90 % and select the i
 | `run_all.py` | Batch orchestrator |
 | `compare_msd.py` | Interactive multi-experiment comparison |
 | `check_ergodicity.py` | Ergodicity check (EA-MSD vs TA-MSD) |
-| `test_msd_simulation.py` | Validation tests |
+| `diffusion_statistics.py` | Rigorous D extraction, histograms, and t-tests |
+| `comp_glycerol_viscosity.py` | Einstein–Stokes D_theory (Cheng 2008) |

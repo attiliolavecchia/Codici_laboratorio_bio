@@ -158,8 +158,14 @@ def _select_fit_data(
     sigma_f = None
     if msd_sigma is not None:
         s = np.asarray(msd_sigma, dtype=float)[mask][valid]
-        if np.all(np.isfinite(s) & (s > 0)):
+        good_sigma = np.isfinite(s) & (s > 0)
+        if np.all(good_sigma):
             sigma_f = s
+        elif np.sum(good_sigma) >= min_points:
+            # Keep only the points that have valid sigma
+            tau_f = tau_f[good_sigma]
+            msd_f = msd_f[good_sigma]
+            sigma_f = s[good_sigma]
 
     return tau_f, msd_f, sigma_f
 
