@@ -62,6 +62,9 @@ DOC_DIR = SCRIPT_DIR / "Docu"
 
 MIN_TRACK_POINTS = 30
 FIT_FRACTIONS = [0.10, 0.25]
+# Only the lowest minstep per experiment is independent — higher minstep
+# files contain a subset of the same tracks.
+INDEPENDENT_MINSTEP = "40minstep"
 
 # Experimental parameters for D_theory (Einstein-Stokes)
 T_C = 23.3       # Temperature [°C]
@@ -763,12 +766,16 @@ def main():
         return
 
     # ── Full analysis mode ─────────────────────────────────────
-    # Gather CSV files
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
+    # Gather CSV files — keep only independent ones (lowest minstep per experiment)
+    all_csv = sorted(DATA_DIR.glob("*.csv"))
+    csv_files = [f for f in all_csv if INDEPENDENT_MINSTEP in f.stem]
     if not csv_files:
-        print(f"No CSV files in {DATA_DIR}")
+        print(f"No independent CSV files ({INDEPENDENT_MINSTEP}) in {DATA_DIR}")
         return
-    print(f"\nFound {len(csv_files)} CSV files in {DATA_DIR.name}/")
+    print(f"\nFound {len(all_csv)} total CSV files, using {len(csv_files)} independent "
+          f"({INDEPENDENT_MINSTEP}) in {DATA_DIR.name}/")
+    for f in csv_files:
+        print(f"  {f.name}")
 
     # Phase B: per-track taMSD D_i
     df_tamsd = extract_per_track_D(csv_files)

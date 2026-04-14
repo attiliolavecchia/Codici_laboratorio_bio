@@ -69,16 +69,8 @@ def plot_data(power, intensity, error, output_filename=None):
     output_filename : str, optional
         If provided, save the plot to this filename
     """
-    # --- skip first 3 points (not physically meaningful) ---
-    power = power[3:]
-    intensity = intensity[3:]
-    error = error[3:]
-
-    # --- filter: keep only statistically significant points ---
-    mask = intensity > error
-
     plt.figure(figsize=(10, 6))
-    plt.errorbar(power[mask], intensity[mask], yerr=error[mask],
+    plt.errorbar(power, intensity, yerr=error,
                  fmt='o-', markersize=6, linewidth=1.5, capsize=4, label='Data')
     plt.xlabel('Power (mW)', fontsize=12)
     plt.ylabel('Mean Intensity (a.u.)', fontsize=12)
