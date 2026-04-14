@@ -2,10 +2,11 @@
 MSD fitting module — all four diffusion models.
 
 Models:
-    1. Linear:           MSD(τ) = 4D·τ
-    2. Nonlinear (drift): MSD(τ) = 4D·τ + v²·τ²
-    3. Anomalous:        MSD(τ) = 4D_α·τ^α
-    4. Anomalous+drift:  MSD(τ) = 4D_α·τ^α + v²·τ²
+    1.  Linear:           MSD(τ) = 4D·τ
+    1b. Linear+offset:   MSD(τ) = 4D·τ + c   (c = 4σ², localization error)
+    2.  Nonlinear (drift): MSD(τ) = 4D·τ + v²·τ²
+    3.  Anomalous:        MSD(τ) = 4D_α·τ^α
+    4.  Anomalous+drift:  MSD(τ) = 4D_α·τ^α + v²·τ²
 
 Each model provides:
     - A model function
@@ -229,6 +230,93 @@ def fit_msd_linear(
 
     return FitResult(
         D=D_opt, D_error=D_err, pcov=pcov,
+        tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_pred,
+        chi_squared_red=chi2, msd_sigma_fit=sigma_f,
+    )
+
+
+# ===================================================================
+# Model 1b — Linear with offset: MSD = 4D·τ + c   (c = 4σ²)
+# ===================================================================
+
+@dataclass(frozen=True)
+class LinearOffsetFitResult:
+    """Result of a linear+offset MSD fit (localization error)."""
+    D: float
+    D_error: float
+    offset: float            # c in MSD = 4Dτ + c
+    offset_error: float
+    sigma_loc: float         # σ = sqrt(c/4) if c > 0, else NaN
+    sigma_loc_error: float   # propagated error
+    pcov: np.ndarray
+    tau_fit: np.ndarray
+    msd_fit: np.ndarray
+    msd_predicted: np.ndarray
+    chi_squared_red: float
+    msd_sigma_fit: Optional[np.ndarray] = None
+
+
+def linear_offset_msd_model(tau: np.ndarray, D: float, c: float) -> np.ndarray:
+    """MSD(τ) = 4D·τ + c"""
+    return 4.0 * D * tau + c
+
+
+def fit_msd_linear_offset(
+    tau: np.ndarray,
+    msd: np.ndarray,
+    n_max: int,
+    dt: float,
+    fit_fraction: float = 0.10,
+    D_initial: float = 1e-2,
+    D_bounds: Tuple[float, float] = (1e-6, 10.0),
+    c_initial: float = 0.0,
+    c_bounds: Tuple[float, float] = (-1.0, 10.0),
+    msd_sigma: Optional[np.ndarray] = None,
+) -> LinearOffsetFitResult:
+    """Fit MSD to linear+offset model: MSD = 4D·τ + c  (c = 4σ²)."""
+    tau = np.asarray(tau, dtype=float)
+    msd = np.asarray(msd, dtype=float)
+    if tau.shape != msd.shape or tau.size == 0:
+        raise ValueError("tau and msd must be non-empty arrays of the same shape")
+    if not (0 < fit_fraction <= 1.0):
+        raise ValueError(f"fit_fraction must be in (0, 1], got {fit_fraction}")
+
+    tau_f, msd_f, sigma_f = _select_fit_data(
+        tau, msd, n_max, dt, fit_fraction, min_points=3, msd_sigma=msd_sigma,
+    )
+
+    popt, pcov = curve_fit(
+        linear_offset_msd_model, tau_f, msd_f,
+        p0=[D_initial, c_initial],
+        bounds=([D_bounds[0], c_bounds[0]], [D_bounds[1], c_bounds[1]]),
+        method="trf",
+        **({"sigma": sigma_f, "absolute_sigma": True} if sigma_f is not None else {}),
+    )
+
+    D_opt = float(popt[0])
+    c_opt = float(popt[1])
+    fin = pcov is not None and np.all(np.isfinite(pcov))
+    D_err = float(np.sqrt(pcov[0, 0])) if fin else float("nan")
+    c_err = float(np.sqrt(pcov[1, 1])) if fin else float("nan")
+
+    # Derive localization error: σ = sqrt(c/4)
+    if c_opt > 0:
+        sigma_loc = float(np.sqrt(c_opt / 4.0))
+        # dσ/dc = 1/(4σ)  →  σ_σ = c_err / (4σ)
+        sigma_loc_err = c_err / (4.0 * sigma_loc) if sigma_loc > 0 else float("nan")
+    else:
+        sigma_loc = float("nan")
+        sigma_loc_err = float("nan")
+
+    msd_pred = linear_offset_msd_model(tau_f, D_opt, c_opt)
+    chi2 = (calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 2)
+            if sigma_f is not None else float("nan"))
+
+    return LinearOffsetFitResult(
+        D=D_opt, D_error=D_err,
+        offset=c_opt, offset_error=c_err,
+        sigma_loc=sigma_loc, sigma_loc_error=sigma_loc_err,
+        pcov=pcov,
         tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_pred,
         chi_squared_red=chi2, msd_sigma_fit=sigma_f,
     )

@@ -3,13 +3,15 @@ Fit MSD data to one of four diffusion models and save a plot with results.
 
 Models:
     linear           — MSD = 4D·τ
+    linear_offset    — MSD = 4D·τ + c   (c = 4σ², localization error)
     nonlinear        — MSD = 4D·τ + v²·τ²
     anomalous        — MSD = 4D_α·τ^α
     anomalous_drift  — MSD = 4D_α·τ^α + v²·τ²
 
 Usage:
-    python fit_msd.py <csv> --model linear   [--max-lag-fraction F] [--fit-fraction F] [--output-dir DIR]
-    python fit_msd.py <csv> --model nonlinear [--max-lag-fraction F] [--output-dir DIR]
+    python fit_msd.py <csv> --model linear         [--max-lag-fraction F] [--fit-fraction F] [--output-dir DIR]
+    python fit_msd.py <csv> --model linear_offset  [--max-lag-fraction F] [--fit-fraction F] [--output-dir DIR]
+    python fit_msd.py <csv> --model nonlinear      [--max-lag-fraction F] [--output-dir DIR]
     python fit_msd.py <csv> --model anomalous [--max-lag-fraction F] [--output-dir DIR]
     python fit_msd.py <csv> --model anomalous_drift [--max-lag-fraction F] [--output-dir DIR]
 """
@@ -27,6 +29,7 @@ from data_reader import read_trajectories_from_csv
 from msd_analyzer import calculate_ensemble_msd
 from msd_fitting import (
     fit_msd_linear, linear_msd_model,
+    fit_msd_linear_offset, linear_offset_msd_model,
     fit_msd_nonlinear, nonlinear_msd_model, analyze_velocities,
     fit_msd_anomalous, anomalous_msd_model,
     fit_msd_anomalous_drift, anomalous_drift_msd_model,
@@ -88,6 +91,34 @@ def _run_linear(msd_result, args, output_dir: Path) -> None:
     out = output_dir / f"{Path(args.csv).stem}_linear_fit.svg"
     _plot_fit(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
               r"Linear: MSD = 4D$\tau$", out, fit.msd_sigma_fit)
+
+
+def _run_linear_offset(msd_result, args, output_dir: Path) -> None:
+    fit = fit_msd_linear_offset(
+        msd_result.tau, msd_result.msd, msd_result.n_max, msd_result.dt,
+        fit_fraction=args.fit_fraction,
+        msd_sigma=msd_result.msd_sem,
+    )
+    sigma_str = (f"  σ_loc = ({fit.sigma_loc:.4e} ± {fit.sigma_loc_error:.2e}) µm"
+                 if np.isfinite(fit.sigma_loc) else "  σ_loc = N/A (c < 0)")
+    print(f"\n  D  = ({fit.D:.4e} ± {fit.D_error:.2e}) μm²/s")
+    print(f"  c  = ({fit.offset:.4e} ± {fit.offset_error:.2e}) μm²")
+    print(sigma_str)
+    print(f"  χ²_ν = {fit.chi_squared_red:.4f}")
+
+    txt_lines = [
+        r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit.D, fit.D_error),
+        r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit.offset, fit.offset_error),
+    ]
+    if np.isfinite(fit.sigma_loc):
+        txt_lines.append(
+            r"$\sigma_{loc} = (%.2e \pm %.1e)\ \mu m$" % (fit.sigma_loc, fit.sigma_loc_error)
+        )
+    txt_lines.append(r"$\chi^2_\nu = %.4f$" % fit.chi_squared_red)
+    txt = "\n".join(txt_lines)
+    out = output_dir / f"{Path(args.csv).stem}_linear_offset_fit.svg"
+    _plot_fit(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
+              r"Linear+offset: MSD = 4D$\tau$ + $c$", out, fit.msd_sigma_fit)
 
 
 def _run_nonlinear(msd_result, trajectories, args, output_dir: Path) -> None:
@@ -159,7 +190,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fit MSD data to a diffusion model.")
     parser.add_argument("csv", help="Path to the trajectories CSV file")
     parser.add_argument("--model", required=True,
-                        choices=["linear", "nonlinear", "anomalous", "anomalous_drift"],
+                        choices=["linear", "linear_offset", "nonlinear",
+                                 "anomalous", "anomalous_drift"],
                         help="Diffusion model to fit")
     parser.add_argument("--max-lag-fraction", type=float, default=None,
                         help="Fraction of longest track to cap max lag for MSD calculation")
@@ -187,6 +219,8 @@ def main() -> None:
 
     if args.model == "linear":
         _run_linear(msd_result, args, output_dir)
+    elif args.model == "linear_offset":
+        _run_linear_offset(msd_result, args, output_dir)
     elif args.model == "nonlinear":
         _run_nonlinear(msd_result, trajectories, args, output_dir)
     elif args.model == "anomalous":

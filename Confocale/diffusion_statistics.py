@@ -20,11 +20,13 @@ Output (SVG for paper, CSV for data):
     Docu/diffusion_statistics_results.csv        — tabular results
 
 Usage:
-    python diffusion_statistics.py
+    python diffusion_statistics.py               # full analysis (all CSV files)
+    python diffusion_statistics.py --file FILE.csv  # single-file taMSD analysis
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import matplotlib
@@ -40,6 +42,8 @@ from msd_analyzer import calculate_ensemble_msd, calculate_time_averaged_msd_per
 from msd_fitting import (
     fit_msd_linear,
     linear_msd_model,
+    fit_msd_linear_offset,
+    linear_offset_msd_model,
     fit_msd_nonlinear,
     nonlinear_msd_model,
     analyze_velocities,
@@ -52,6 +56,7 @@ SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "Data" / "31_10_no_anomalous"
 STATS_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "diffusion_statistics"
 LINEAR_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "linear_fits"
+LINEAR_OFFSET_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "linear_offset_fits"
 NONLINEAR_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "nonlinear_fits"
 DOC_DIR = SCRIPT_DIR / "Docu"
 
@@ -186,6 +191,29 @@ def extract_per_track_D(csv_files):
                 except (ValueError, RuntimeError):
                     pass
 
+                # ── Linear+offset fit ──────────────────────────────
+                try:
+                    fit_lo = fit_msd_linear_offset(
+                        tamsd.tau, tamsd.msd, tamsd.n_max, tamsd.dt,
+                        fit_fraction=1.0,
+                        msd_sigma=tamsd.msd_sem,
+                    )
+                    rows.append({
+                        **base_row,
+                        "model": "linear_offset",
+                        "D": fit_lo.D,
+                        "D_error": fit_lo.D_error,
+                        "chi2_red": fit_lo.chi_squared_red,
+                        "v": np.nan,
+                        "v_error": np.nan,
+                        "offset": fit_lo.offset,
+                        "offset_error": fit_lo.offset_error,
+                        "sigma_loc": fit_lo.sigma_loc,
+                        "sigma_loc_error": fit_lo.sigma_loc_error,
+                    })
+                except (ValueError, RuntimeError):
+                    pass
+
                 # ── Nonlinear (drift) fit ──────────────────────────
                 if vstats is not None:
                     try:
@@ -284,6 +312,49 @@ def extract_per_file_D(csv_files):
                 )
             except (ValueError, RuntimeError) as e:
                 print(f"    linear {pct}%: FAILED — {e}")
+
+            # ── Linear+offset fit ──────────────────────────────
+            try:
+                fit_lo = fit_msd_linear_offset(
+                    eamsd.tau, eamsd.msd, eamsd.n_max, eamsd.dt,
+                    fit_fraction=1.0,
+                    msd_sigma=eamsd.msd_sem,
+                )
+                rows.append({
+                    **base_row,
+                    "model": "linear_offset",
+                    "D": fit_lo.D,
+                    "D_error": fit_lo.D_error,
+                    "chi2_red": fit_lo.chi_squared_red,
+                    "v": np.nan,
+                    "v_error": np.nan,
+                    "offset": fit_lo.offset,
+                    "offset_error": fit_lo.offset_error,
+                    "sigma_loc": fit_lo.sigma_loc,
+                    "sigma_loc_error": fit_lo.sigma_loc_error,
+                })
+
+                tag = f"f{pct:03d}"
+                txt_lines = [
+                    r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lo.D, fit_lo.D_error),
+                    r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit_lo.offset, fit_lo.offset_error),
+                ]
+                if np.isfinite(fit_lo.sigma_loc):
+                    txt_lines.append(
+                        r"$\sigma_{loc} = (%.2e \pm %.1e)\ \mu m$"
+                        % (fit_lo.sigma_loc, fit_lo.sigma_loc_error)
+                    )
+                txt_lines.append(r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red)
+                _save_fit_plot(
+                    fit_lo.tau_fit, fit_lo.msd_fit, fit_lo.msd_predicted,
+                    "\n".join(txt_lines),
+                    r"Linear+offset: MSD = 4D$\tau$ + $c$",
+                    LINEAR_OFFSET_DIR / f"{stem}_eamsd_linear_offset_{tag}.svg",
+                    fit_lo.msd_sigma_fit,
+                    data_color="C0",
+                )
+            except (ValueError, RuntimeError) as e:
+                print(f"    linear_offset {pct}%: FAILED — {e}")
 
             # ── Nonlinear (drift) fit ──────────────────────────
             if vstats is not None:
@@ -399,6 +470,49 @@ def extract_ensemble_tamsd_D(csv_files):
             except (ValueError, RuntimeError) as e:
                 print(f"    linear {pct}%: FAILED -- {e}")
 
+            # -- Linear+offset fit ----------------------------------
+            try:
+                fit_lo = fit_msd_linear_offset(
+                    tau, msd_mean, n_max, global_dt,
+                    fit_fraction=1.0,
+                    msd_sigma=msd_sem,
+                )
+                rows.append({
+                    **base_row,
+                    "model": "linear_offset",
+                    "D": fit_lo.D,
+                    "D_error": fit_lo.D_error,
+                    "chi2_red": fit_lo.chi_squared_red,
+                    "v": np.nan,
+                    "v_error": np.nan,
+                    "offset": fit_lo.offset,
+                    "offset_error": fit_lo.offset_error,
+                    "sigma_loc": fit_lo.sigma_loc,
+                    "sigma_loc_error": fit_lo.sigma_loc_error,
+                })
+
+                tag = f"f{pct:03d}"
+                txt_lines = [
+                    r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lo.D, fit_lo.D_error),
+                    r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit_lo.offset, fit_lo.offset_error),
+                ]
+                if np.isfinite(fit_lo.sigma_loc):
+                    txt_lines.append(
+                        r"$\sigma_{loc} = (%.2e \pm %.1e)\ \mu m$"
+                        % (fit_lo.sigma_loc, fit_lo.sigma_loc_error)
+                    )
+                txt_lines.append(r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red)
+                _save_fit_plot(
+                    fit_lo.tau_fit, fit_lo.msd_fit, fit_lo.msd_predicted,
+                    "\n".join(txt_lines),
+                    r"Linear+offset: MSD = 4D$\tau$ + $c$",
+                    LINEAR_OFFSET_DIR / f"{stem}_ens_tamsd_linear_offset_{tag}.svg",
+                    fit_lo.msd_sigma_fit,
+                    data_color="C2",
+                )
+            except (ValueError, RuntimeError) as e:
+                print(f"    linear_offset {pct}%: FAILED -- {e}")
+
             # -- Nonlinear (drift) fit ------------------------------
             if vstats is not None:
                 try:
@@ -474,11 +588,167 @@ def one_sample_ttest(D_values, D_theory):
     return float(t_stat), float(p_val)
 
 
+# ── Single-file analysis ───────────────────────────────────────────────
+
+def analyze_single_file(csv_path: Path, D_theory: float):
+    """Run per-track taMSD analysis on a single CSV file.
+
+    Produces histograms, fit plots, statistics, t-tests, and saves
+    results under a file-specific subdirectory.
+    """
+    csv_path = Path(csv_path).resolve()
+    if not csv_path.exists():
+        print(f"ERROR: file not found: {csv_path}")
+        return
+
+    stem = csv_path.stem
+    out_dir = STATS_DIR / stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nSingle-file taMSD analysis: {csv_path.name}")
+    print(f"D_theory = {D_theory:.6e} um^2/s")
+
+    # Extract per-track D for this one file
+    df = extract_per_track_D([csv_path])
+    if df.empty:
+        print("No fits extracted — nothing to analyse.")
+        return
+
+    # Per model×fraction: histogram, stats, t-test
+    summary_rows = []
+    for model in ("linear", "linear_offset", "nonlinear"):
+        for frac in FIT_FRACTIONS:
+            pct = int(frac * 100)
+            tag = f"{model}_f{pct:03d}"
+            mask = (df["model"] == model) & (df["fraction"] == frac)
+            D_vals = df.loc[mask, "D"].values
+            D_vals = D_vals[np.isfinite(D_vals)]
+
+            st = compute_statistics(D_vals)
+            t_stat, p_val = one_sample_ttest(D_vals, D_theory)
+            rel_err = abs(st["mean"] - D_theory) / D_theory if st["n"] > 0 else np.nan
+
+            print(f"\n{'-'*60}")
+            print(f"{stem} | taMSD | {model} | {pct}%")
+            print(f"  N tracks    = {st['n']}")
+            print(f"  Mean(D)     = {st['mean']:.4e} um^2/s")
+            print(f"  Median(D)   = {st['median']:.4e} um^2/s")
+            print(f"  Std(D)      = {st['std']:.4e} um^2/s")
+            print(f"  SEM(D)      = {st['sem']:.4e} um^2/s")
+            print(f"  D_theory    = {D_theory:.4e} um^2/s")
+            print(f"  |<D>-D_th|/D_th = {rel_err:.4f}")
+            print(f"  t-test: t = {t_stat:.3f}, p = {p_val:.4e}")
+
+            if st["n"] > 0:
+                _plot_histogram(
+                    D_vals, D_theory,
+                    xlabel=r"$D$ [$\mu$m$^2$/s]",
+                    output_path=out_dir / f"tamsd_D_histogram_{tag}.svg",
+                    mean_val=st["mean"],
+                    median_val=st["median"],
+                    title=f"{stem} — taMSD {model} {pct}%",
+                )
+
+            summary_rows.append(dict(
+                file=stem, model=model, fraction=frac,
+                N_tracks=st["n"],
+                D_mean=st["mean"], D_median=st["median"],
+                D_std=st["std"], D_sem=st["sem"],
+                t_stat=t_stat, p_val=p_val,
+                rel_err=rel_err, D_theory=D_theory,
+            ))
+
+    # Save CSVs
+    df_summary = pd.DataFrame(summary_rows)
+    df_summary.to_csv(out_dir / "summary.csv", index=False, float_format="%.6e")
+    df.to_csv(out_dir / "tamsd_per_track.csv", index=False, float_format="%.6e")
+    print(f"\nResults saved in {out_dir}")
+    return df_summary
+
+
+def rank_files_by_D(csv_files, D_theory: float):
+    """Run per-track taMSD on each file individually and rank by |<D>-D_theory|.
+
+    Prints a comparison table and returns the ranking DataFrame.
+    """
+    df_all = extract_per_track_D(csv_files)
+    if df_all.empty:
+        print("No per-track fits — cannot rank files.")
+        return pd.DataFrame()
+
+    ranking_rows = []
+    for model in ("linear", "linear_offset", "nonlinear"):
+        for frac in FIT_FRACTIONS:
+            pct = int(frac * 100)
+            mask = (df_all["model"] == model) & (df_all["fraction"] == frac)
+            sub = df_all.loc[mask]
+            for fname, grp in sub.groupby("file"):
+                D_vals = grp["D"].values
+                D_vals = D_vals[np.isfinite(D_vals)]
+                st = compute_statistics(D_vals)
+                t_stat, p_val = one_sample_ttest(D_vals, D_theory)
+                rel_err = abs(st["mean"] - D_theory) / D_theory if st["n"] > 0 else np.nan
+                ranking_rows.append(dict(
+                    file=fname, model=model, fraction=frac,
+                    N_tracks=st["n"],
+                    D_mean=st["mean"], D_sem=st["sem"],
+                    rel_err=rel_err,
+                    t_stat=t_stat, p_val=p_val,
+                ))
+
+    df_rank = pd.DataFrame(ranking_rows)
+    if df_rank.empty:
+        return df_rank
+
+    # Save per-file ranking CSV
+    rank_csv = DOC_DIR / "diffusion_statistics_per_file_ranking.csv"
+    df_rank.to_csv(rank_csv, index=False, float_format="%.6e")
+    print(f"\nPer-file ranking saved to {rank_csv}")
+
+    # Print nice table per model×fraction, sorted by rel_err
+    print(f"\n{'='*100}")
+    print("PER-FILE RANKING (taMSD per-track D vs D_theory)")
+    print(f"D_theory = {D_theory:.6e} um^2/s")
+    print(f"{'='*100}")
+    for model in ("linear", "linear_offset", "nonlinear"):
+        for frac in FIT_FRACTIONS:
+            pct = int(frac * 100)
+            sel = df_rank[(df_rank["model"] == model) & (df_rank["fraction"] == frac)].copy()
+            if sel.empty:
+                continue
+            sel = sel.sort_values("rel_err")
+            print(f"\n--- {model} | {pct}% lag fraction ---")
+            print(f"{'Rank':>4}  {'File':<45} {'N':>5} {'<D>':>11} {'+/-SEM':>11} {'|rel err|':>10} {'p-val':>10}")
+            for rank_i, (_, row) in enumerate(sel.iterrows(), 1):
+                marker = " <<<" if rank_i == 1 else ""
+                print(
+                    f"{rank_i:>4}  {row['file']:<45} {row['N_tracks']:>5} "
+                    f"{row['D_mean']:>11.4e} {row['D_sem']:>11.4e} "
+                    f"{row['rel_err']:>10.4f} {row['p_val']:>10.4e}{marker}"
+                )
+    print(f"{'='*100}")
+    return df_rank
+
+
 # ── Main ───────────────────────────────────────────────────────────────
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Diffusion coefficient statistical analysis",
+    )
+    parser.add_argument(
+        "--file", "-f", type=str, default=None,
+        help="Path to a single CSV file for per-track taMSD analysis only. "
+             "If omitted, all CSV files in the data directory are analysed.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     # Create output dirs
-    for d in (STATS_DIR, LINEAR_DIR, NONLINEAR_DIR, DOC_DIR):
+    for d in (STATS_DIR, LINEAR_DIR, LINEAR_OFFSET_DIR, NONLINEAR_DIR, DOC_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     # D_theory in µm²/s
@@ -487,6 +757,12 @@ def main():
     print(f"D_theory (Einstein-Stokes) = {D_theory:.6e} um^2/s")
     print(f"  ({D_theory_m2s:.6e} m^2/s)")
 
+    # ── Single-file mode ───────────────────────────────────────
+    if args.file is not None:
+        analyze_single_file(Path(args.file), D_theory)
+        return
+
+    # ── Full analysis mode ─────────────────────────────────────
     # Gather CSV files
     csv_files = sorted(DATA_DIR.glob("*.csv"))
     if not csv_files:
@@ -506,7 +782,7 @@ def main():
     # Phase D+E: histograms, statistics, and t-tests
     summary_rows = []
 
-    for model in ("linear", "nonlinear"):
+    for model in ("linear", "linear_offset", "nonlinear"):
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
             tag = f"{model}_f{pct:03d}"
@@ -639,6 +915,9 @@ def main():
         ens_tamsd_csv = DOC_DIR / "diffusion_statistics_ens_tamsd_per_file.csv"
         df_ens_tamsd.to_csv(ens_tamsd_csv, index=False, float_format="%.6e")
         print(f"Per-file <taMSD> CSV saved to {ens_tamsd_csv}")
+
+    # ── Per-file ranking (taMSD per-track D vs D_theory) ───────
+    rank_files_by_D(csv_files, D_theory)
 
     # ── Final summary table ─────────────────────────────────────
     print(f"\n{'='*120}")

@@ -54,7 +54,7 @@ def print_data_table(power, intensity, error):
     n_excl = int((~mask).sum())
     print(f"Excluded: {n_excl} point(s) with I ≤ err  |  Kept: {int(mask.sum())} point(s)\n")
 
-def plot_data(power, intensity, output_filename=None):
+def plot_data(power, intensity, error, output_filename=None):
     """
     Plot Power vs Mean Intensity.
     
@@ -64,11 +64,22 @@ def plot_data(power, intensity, output_filename=None):
         Power values (mW)
     intensity : array
         Mean Intensity values (a.u.)
+    error : array
+        Error values
     output_filename : str, optional
         If provided, save the plot to this filename
     """
+    # --- skip first 3 points (not physically meaningful) ---
+    power = power[3:]
+    intensity = intensity[3:]
+    error = error[3:]
+
+    # --- filter: keep only statistically significant points ---
+    mask = intensity > error
+
     plt.figure(figsize=(10, 6))
-    plt.plot(power, intensity, 'o-', markersize=6, linewidth=1.5, label='Data')
+    plt.errorbar(power[mask], intensity[mask], yerr=error[mask],
+                 fmt='o-', markersize=6, linewidth=1.5, capsize=4, label='Data')
     plt.xlabel('Power (mW)', fontsize=12)
     plt.ylabel('Mean Intensity (a.u.)', fontsize=12)
     #plt.title('Mean Intensity vs Power', fontsize=14)
@@ -91,6 +102,11 @@ def plot_data_with_fit(power, intensity, error, output_filename=None):
     error bars, and reduced chi-square.
     Only data points with intensity > error are used for the fit.
     """
+    # --- skip first 3 points (not physically meaningful) ---
+    power = power[3:]
+    intensity = intensity[3:]
+    error = error[3:]
+
     # --- filter: keep only statistically significant points ---
     mask = intensity > error
     P_fit_data  = power[mask]
@@ -133,24 +149,16 @@ def plot_data_with_fit(power, intensity, error, output_filename=None):
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # excluded points in grey
-    if (~mask).any():
-        ax.errorbar(power[~mask], intensity[~mask], yerr=error[~mask],
-                    fmt='s', markersize=6, capsize=4,
-                    color='lightgrey', ecolor='lightgrey',
-                    label='Excluded Data (I ≤ err)')
-
     # valid points
     ax.errorbar(P_fit_data, I_fit_data, yerr=err_fit_data,
-                fmt='o', markersize=6, capsize=4, label='Data (used in fit)')
+                fmt='o', markersize=6, capsize=4, label='Data')
 
     ax.plot(P_smooth, I_smooth, '-', linewidth=1.5,
             label=(
                 f'Fit: $I = \\alpha \\cdot P^n$\n'
                 f'$\\alpha = {alpha:.2e} \\pm {alpha_err:.2e}$\n'
                 f'$n = {n:.3f} \\pm {n_err:.3f}$\n'
-                #f'$\\chi^2_r = {chi2_r:.4f}$\n'
-                f'$R^2 = {r2:.4f}$'
+                f'$\\chi^2_r = {chi2_r:.4f}$'
             ))
 
     ax.set_xlabel('Power (mW)', fontsize=12)
@@ -187,7 +195,7 @@ if __name__ == "__main__":
         print_data_table(power, intensity, error)
         
         # Plot the data
-        plot_data(power, intensity, output_filename="power_intensity_plot.svg")
+        plot_data(power, intensity, error, output_filename="power_intensity_plot.svg")
         
         # Plot with power-law fit
         plot_data_with_fit(power, intensity, error, output_filename="power_intensity_fit.svg")
