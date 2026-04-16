@@ -85,7 +85,7 @@ if __name__ == "__main__":
     print(f"Particle radius:      r = {r*1e9:.0f} nm")
     print(f"k_B:                  {k_B} J/K")
     print()
-    print(f"eta_mix (85%, 23.3°C) = {eta:.6e} Pa·s  ({eta*1e3:.2f} mPa·s)")
+    print(f"eta_mix (85%, 23.3°C) = {eta:.6e} Pa·s    ({eta*1e3:.2f} mPa·s)")
     print()
     print(f"D = k_B T / (6 pi eta r)")
     print(f"  = {D:.6e} m²/s")

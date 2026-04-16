@@ -1,26 +1,29 @@
 """
-Ergodicity check — compare EA-MSD and ensemble-averaged TA-MSD.
+Ergodicity check — compare D from EA-MSD and ⟨TA-MSD⟩.
 
 For an ergodic process the two MSD estimators must converge to the same
-curve.  This script overlays them on a single plot for each CSV file in
-the non-anomalous dataset, at lag fractions of 10 % and 25 %.
+curve, yielding the same diffusion coefficient D.  This script extracts D
+from both estimators (linear+offset fit on the first 10 % of the lag range)
+for each 40 min-step experiment and produces a paired dot-plot comparison.
+
+Note on the ergodicity-breaking (EB) parameter
+-----------------------------------------------
+For a simple Brownian system like beads in glycerol/water, the direct
+comparison of D is the most informative ergodicity test.  A full EB(τ)
+analysis is omitted here because at long time-lags the MSD is dominated
+by drift (v²τ²), which inflates the EB variance without reflecting
+genuine non-ergodic behaviour.
 
 Output:
     Results/no_anomalous/ergodicity/
-        <stem>_ergodicity_f010.svg   — overlay plot (10 % lag fraction)
-        <stem>_ergodicity_f025.svg   — overlay plot (25 % lag fraction)
-        <stem>_ergodicity_f050.svg   — overlay plot (50 % lag fraction)
-        <stem>_eb_f010.svg           — EB parameter plot (10 %)
-        <stem>_eb_f025.svg           — EB parameter plot (25 %)
-        <stem>_eb_f050.svg           — EB parameter plot (50 %)
+        D_comparison_paired.svg  — paired dot plot D_eaMSD vs D_⟨taMSD⟩
 
 Usage:
-    python check_ergodicity.py [--compare-fraction 0.10]
+    python check_ergodicity.py
 """
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import warnings
@@ -42,12 +45,13 @@ from msd_analyzer import (
     determine_maximum_lag_steps,
     estimate_global_time_step,
 )
+from msd_fitting import fit_msd_linear_offset
 
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "Data" / "31_10_no_anomalous"
 OUT_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "ergodicity"
 
-LAG_FRACTIONS = [0.10, 0.25, 0.50]  # Lag fractions to test (10%, 25%, 50%)
+D_FIT_FRACTION = 0.10  # Fit D on first 10% of lag points
 
 
 def compute_ensemble_tamsd(trajectories, *, max_lag_fraction=None, global_dt=None):
@@ -94,181 +98,161 @@ def compute_ensemble_tamsd(trajectories, *, max_lag_fraction=None, global_dt=Non
     return tau, msd_mean, msd_sem, per_track_matrix
 
 
-def compute_eb_parameter(per_track_matrix):
-    """Ergodicity breaking parameter EB(τ).
+# ===================================================================
+# D comparison: EA-MSD vs ⟨TA-MSD⟩ (paired dot plot)
+# ===================================================================
 
-    EB(τ) = [⟨δ²(τ)²⟩ − ⟨δ²(τ)⟩²] / ⟨δ²(τ)⟩²
+def fit_D_from_msd(tau, msd, msd_sem, dt):
+    """Fit linear_offset model on first 10 % of lag points.
 
-    i.e. the relative variance of the per-track TA-MSD values at each lag.
-    For an ergodic process EB → 0 when observation time T ≫ τ.
-
-    Parameters
-    ----------
-    per_track_matrix : (M, K) ndarray
-        Individual TA-MSD curves (NaN for missing lags).
-
-    Returns
-    -------
-    eb : (K,) ndarray
-        EB parameter at each lag (NaN where fewer than 2 tracks contribute).
-    n_tracks : (K,) ndarray of int
-        Number of tracks contributing at each lag.
+    Returns (D, D_error) or (nan, nan) on failure.
     """
-    with np.errstate(invalid="ignore"):
-        mean = np.nanmean(per_track_matrix, axis=0)        # ⟨δ²⟩
-        mean_sq = np.nanmean(per_track_matrix ** 2, axis=0) # ⟨δ²²⟩
-        eb = (mean_sq - mean ** 2) / (mean ** 2)
-
-    n_tracks = np.sum(~np.isnan(per_track_matrix), axis=0)
-    eb[n_tracks < 2] = np.nan
-    return eb, n_tracks
-
-
-def plot_eb_parameter(tau, eb, n_tracks, output_path, title=""):
-    """Plot EB(τ) vs τ with a secondary axis showing contributing tracks."""
-    fig, ax1 = plt.subplots(figsize=(8, 5.5))
-
-    valid = ~np.isnan(eb)
-    ax1.plot(tau[valid], eb[valid], "o-", color="C2", markersize=4,
-             label="EB(τ)", zorder=3)
-    ax1.axhline(0, color="grey", linewidth=0.8, linestyle="--", alpha=0.6)
-    ax1.set_xlabel(r"Time lag $\tau$ [s]", fontsize=12)
-    ax1.set_ylabel(r"EB($\tau$)", fontsize=12, color="C2")
-    ax1.tick_params(axis="y", labelcolor="C2")
-    ax1.grid(True, linestyle=":", alpha=0.5)
-
-    # Secondary axis: number of tracks
-    ax2 = ax1.twinx()
-    ax2.fill_between(tau, 0, n_tracks, alpha=0.15, color="C7", step="mid")
-    ax2.set_ylabel("# tracks", fontsize=11, color="C7")
-    ax2.tick_params(axis="y", labelcolor="C7")
-
-    if title:
-        ax1.set_title(title, fontsize=11)
-
-    ax1.legend(loc="upper right", fontsize=10)
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=300)
-    plt.close(fig)
+    n_max = len(tau)
+    try:
+        res = fit_msd_linear_offset(
+            tau, msd, n_max=n_max, dt=dt,
+            fit_fraction=D_FIT_FRACTION, msd_sigma=msd_sem,
+        )
+        return res.D, res.D_error
+    except Exception:
+        return float("nan"), float("nan")
 
 
-def plot_ergodicity(tau_ea, msd_ea, sem_ea,
-                    tau_ta, msd_ta, sem_ta,
-                    compare_n, output_path, title=""):
-    """Overlay EA-MSD and ensemble-averaged TA-MSD with comparison region shaded."""
-    fig, ax = plt.subplots(figsize=(8, 5.5))
+def run_d_comparison(files):
+    """For each file, fit D from eaMSD and ⟨taMSD⟩, then make paired dot plot."""
+    labels = []
+    d_ea_vals, d_ea_errs = [], []
+    d_ta_vals, d_ta_errs = [], []
 
-    ax.errorbar(tau_ea, msd_ea, yerr=sem_ea, fmt="o-", color="C0",
-                capsize=3, capthick=1, elinewidth=1, markersize=5,
-                label="EA-MSD", alpha=0.85, zorder=3)
-    ax.errorbar(tau_ta, msd_ta, yerr=sem_ta, fmt="s-", color="C3",
-                capsize=3, capthick=1, elinewidth=1, markersize=5,
-                label="TA-MSD (ensemble avg)", alpha=0.85, zorder=3)
+    # Compute MSD up to 50% so fit_msd_linear_offset can use 10% of that range
+    msd_lag_fraction = 0.50
 
-    # Shade comparison region
-    #tau_limit = tau_ea[min(compare_n, len(tau_ea)) - 1] if compare_n <= len(tau_ea) else tau_ea[-1]
-    #ax.axvspan(0, tau_limit, color="grey", alpha=0.10, label=f"Comparison region")
-
-    ax.set_xlabel(r"Time lag $\tau$ [s]", fontsize=12)
-    ax.set_ylabel(r"MSD [$\mu$m$^2$]", fontsize=12)
-    if title:
-        ax.set_title(title, fontsize=11)
-    ax.legend(fontsize=10)
-    ax.grid(True, linestyle=":", alpha=0.5)
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=300)
-    plt.close(fig)
-
-
-#def compute_deviation(msd_ea, msd_ta, compare_n):
-#    """Relative deviation metrics over the first *compare_n* lag points.
-
-#    Returns (mean_rel_dev_pct, max_rel_dev_pct).
-#    """
-#    n = min(compare_n, len(msd_ea), len(msd_ta))
-#    ea = msd_ea[:n]
-#    ta = msd_ta[:n]
-#    # Avoid division by zero — only consider points where EA-MSD > 0
-#    valid = ea > 0
-#    if not np.any(valid):
-#        return float("nan"), float("nan")
-#    rel = np.abs(ea[valid] - ta[valid]) / ea[valid]
-#    return float(np.mean(rel)) * 100.0, float(np.max(rel)) * 100.0
-
-
-def process_file(csv_file, compare_fraction):
-    """Process one CSV: for each lag fraction, compute MSD curves and make plot."""
-    stem = csv_file.stem
-    print(f"  {csv_file.name}")
-
-    trajectories = read_trajectories_from_csv(str(csv_file))
-    if not trajectories:
-        print("    no trajectories")
-        return
-
-    for lag_fraction in LAG_FRACTIONS:
-        pct = int(lag_fraction * 100)
-        tag = f"f{pct:03d}"
-
-        # EA-MSD
-        ea = calculate_ensemble_msd(trajectories, max_lag_fraction=lag_fraction)
-        if ea.tau.size == 0:
-            print(f"    {pct:2d}% — empty EA-MSD")
+    for csv_file in files:
+        stem = csv_file.stem
+        short = stem.replace("_spots_40minstep", "")
+        trajectories = read_trajectories_from_csv(str(csv_file))
+        if not trajectories:
             continue
 
-        # Ensemble-averaged TA-MSD (using the same lag fraction and global dt)
-        tau_ta, msd_ta, sem_ta, per_track_matrix = compute_ensemble_tamsd(
-            trajectories, max_lag_fraction=lag_fraction, global_dt=ea.dt,
+        # EA-MSD
+        ea = calculate_ensemble_msd(trajectories, max_lag_fraction=msd_lag_fraction)
+        if ea.tau.size == 0:
+            continue
+
+        # Ensemble-averaged TA-MSD
+        tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
+            trajectories, max_lag_fraction=msd_lag_fraction, global_dt=ea.dt,
         )
 
-        # Trim both to common length
-        n_common = min(ea.tau.size, tau_ta.size)
-        tau_ea = ea.tau[:n_common]
-        msd_ea = ea.msd[:n_common]
-        sem_ea = ea.msd_sem[:n_common]
-        tau_ta = tau_ta[:n_common]
-        msd_ta = msd_ta[:n_common]
-        sem_ta = sem_ta[:n_common]
+        # Trim to common length
+        n = min(ea.tau.size, tau_ta.size)
 
-        compare_n = max(2, int(compare_fraction * n_common))
-        #mean_dev, max_dev = compute_deviation(msd_ea, msd_ta, compare_n)
+        D_ea, D_ea_err = fit_D_from_msd(ea.tau[:n], ea.msd[:n], ea.msd_sem[:n], ea.dt)
+        D_ta, D_ta_err = fit_D_from_msd(tau_ta[:n], msd_ta[:n], sem_ta[:n], ea.dt)
 
-        out_path = OUT_DIR / f"{stem}_ergodicity_{tag}.svg"
-        plot_ergodicity(
-            tau_ea, msd_ea, sem_ea,
-            tau_ta, msd_ta, sem_ta,
-            compare_n, out_path,
-        )
+        labels.append(short)
+        d_ea_vals.append(D_ea)
+        d_ea_errs.append(D_ea_err)
+        d_ta_vals.append(D_ta)
+        d_ta_errs.append(D_ta_err)
 
-        # Ergodicity breaking parameter
-        eb, eb_ntracks = compute_eb_parameter(per_track_matrix[:, :n_common])
-        eb_path = OUT_DIR / f"{stem}_eb_{tag}.svg"
-        plot_eb_parameter(tau_ea, eb, eb_ntracks, eb_path)
+    if not labels:
+        print("  D comparison: no valid files")
+        return
+
+    d_ea = np.array(d_ea_vals)
+    d_ta = np.array(d_ta_vals)
+    d_ea_e = np.array(d_ea_errs)
+    d_ta_e = np.array(d_ta_errs)
+
+    plot_d_comparison(labels, d_ea, d_ea_e, d_ta, d_ta_e)
+    print_d_statistics(labels, d_ea, d_ea_e, d_ta, d_ta_e)
+
+
+def plot_d_comparison(labels, d_ea, d_ea_err, d_ta, d_ta_err):
+    """Paired dot plot: two points per experiment connected by a line."""
+    n = len(labels)
+    x = np.arange(n)
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+
+    # EA-MSD points
+    ax.errorbar(x, d_ea, yerr=d_ea_err, fmt="o", color="C0",
+                capsize=4, capthick=1.2, markersize=8, label="EA-MSD",
+                zorder=3)
+    # ⟨TA-MSD⟩ points
+    ax.errorbar(x, d_ta, yerr=d_ta_err, fmt="o", color="C3",
+                capsize=4, capthick=1.2, markersize=8,
+                label=r"$\langle$TA-MSD$\rangle$", zorder=3)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Experiment {i+1}" for i in range(n)], fontsize=10)
+    ax.set_ylabel(r"$D$ [$\mu$m$^2$/s]", fontsize=12)
+    #ax.set_title("D comparison: EA-MSD vs "
+                 #r"$\langle$TA-MSD$\rangle$"
+                 #f" (linear+offset, {int(D_FIT_FRACTION*100)}% lag)",
+                 #fontsize=11)
+    ax.legend(fontsize=10)
+    ax.grid(True, axis="y", linestyle=":", alpha=0.5)
+    fig.tight_layout()
+
+    out = OUT_DIR / "D_comparison_paired.svg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=300)
+    plt.close(fig)
+    print(f"  -> {out.name}")
+
+
+def print_d_statistics(labels, d_ea, d_ea_err, d_ta, d_ta_err):
+    """Print detailed D comparison statistics to the terminal."""
+    n = len(labels)
+
+    print(f"\n  {'File':<15s}  {'D_eaMSD':>12s} {'± δD':>10s}  "
+          f"{'D_⟨taMSD⟩':>12s} {'± δD':>10s}  {'ΔD/D̄ [%]':>10s}")
+    print("  " + "─" * 80)
+
+    rel_diffs = []
+    for i in range(n):
+        d_bar = 0.5 * (d_ea[i] + d_ta[i])
+        rel = (d_ea[i] - d_ta[i]) / d_bar * 100 if d_bar > 0 else float("nan")
+        rel_diffs.append(rel)
+        print(f"  {labels[i]:<15s}  {d_ea[i]:12.4e} {d_ea_err[i]:10.2e}  "
+              f"{d_ta[i]:12.4e} {d_ta_err[i]:10.2e}  {rel:+10.1f}")
+
+    rel_arr = np.array(rel_diffs)
+    abs_rel = np.abs(rel_arr[~np.isnan(rel_arr)])
+
+    print("  " + "─" * 80)
+    print(f"\n  Summary ({n} experiments, 40 min-step):")
+    print(f"    ⟨D_eaMSD⟩  = {np.mean(d_ea):.4e} ± {np.std(d_ea, ddof=1):.2e} µm²/s")
+    print(f"    ⟨D_taMSD⟩  = {np.mean(d_ta):.4e} ± {np.std(d_ta, ddof=1):.2e} µm²/s")
+    print(f"    Mean |ΔD/D̄| = {np.mean(abs_rel):.1f} %")
+    print(f"    Max  |ΔD/D̄| = {np.max(abs_rel):.1f} %  ({labels[np.argmax(abs_rel)]})")
+
+    # Check consistency within combined fit errors
+    consistent = 0
+    for i in range(n):
+        sigma_combined = np.sqrt(d_ea_err[i]**2 + d_ta_err[i]**2)
+        if sigma_combined > 0 and abs(d_ea[i] - d_ta[i]) < 2 * sigma_combined:
+            consistent += 1
+    print(f"    Consistent within 2σ_fit: {consistent}/{n} experiments")
+    print()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ergodicity check: EA-MSD vs TA-MSD (non-anomalous).")
-    parser.add_argument("--compare-fraction", type=float, default=0.10,
-                        help="Fraction of lag range used for deviation metric (default 0.10)")
-    args = parser.parse_args()
-
-    files = sorted(DATA_DIR.glob("*.csv"))
+    files = sorted(DATA_DIR.glob("*_40minstep.csv"))
     if not files:
-        print(f"No CSV files found in {DATA_DIR}")
+        print(f"No 40 min-step CSV files found in {DATA_DIR}")
         return
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    fracs_str = ", ".join(f"{int(f*100)}%" for f in LAG_FRACTIONS)
-    print(f"Ergodicity check: {len(files)} files × lag fractions [{fracs_str}]")
-    print(f"  compare_fraction = {args.compare_fraction}\n")
+    print(f"Ergodicity check: D comparison on {len(files)} × 40 min-step files")
+    print(f"  Fit model: linear+offset on first {int(D_FIT_FRACTION*100)}% of lag range\n")
 
-    for csv_file in files:
-        process_file(csv_file, args.compare_fraction)
+    run_d_comparison(files)
 
-    print("\nDone.")
+    print("Done.")
 
 
 if __name__ == "__main__":

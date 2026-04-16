@@ -211,8 +211,6 @@ def extract_per_track_D(csv_files):
                         "v_error": np.nan,
                         "offset": fit_lo.offset,
                         "offset_error": fit_lo.offset_error,
-                        "sigma_loc": fit_lo.sigma_loc,
-                        "sigma_loc_error": fit_lo.sigma_loc_error,
                     })
                 except (ValueError, RuntimeError):
                     pass
@@ -333,21 +331,14 @@ def extract_per_file_D(csv_files):
                     "v_error": np.nan,
                     "offset": fit_lo.offset,
                     "offset_error": fit_lo.offset_error,
-                    "sigma_loc": fit_lo.sigma_loc,
-                    "sigma_loc_error": fit_lo.sigma_loc_error,
                 })
 
                 tag = f"f{pct:03d}"
                 txt_lines = [
                     r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lo.D, fit_lo.D_error),
                     r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit_lo.offset, fit_lo.offset_error),
+                    r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red,
                 ]
-                if np.isfinite(fit_lo.sigma_loc):
-                    txt_lines.append(
-                        r"$\sigma_{loc} = (%.2e \pm %.1e)\ \mu m$"
-                        % (fit_lo.sigma_loc, fit_lo.sigma_loc_error)
-                    )
-                txt_lines.append(r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red)
                 _save_fit_plot(
                     fit_lo.tau_fit, fit_lo.msd_fit, fit_lo.msd_predicted,
                     "\n".join(txt_lines),
@@ -490,21 +481,14 @@ def extract_ensemble_tamsd_D(csv_files):
                     "v_error": np.nan,
                     "offset": fit_lo.offset,
                     "offset_error": fit_lo.offset_error,
-                    "sigma_loc": fit_lo.sigma_loc,
-                    "sigma_loc_error": fit_lo.sigma_loc_error,
                 })
 
                 tag = f"f{pct:03d}"
                 txt_lines = [
                     r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lo.D, fit_lo.D_error),
                     r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit_lo.offset, fit_lo.offset_error),
+                    r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red,
                 ]
-                if np.isfinite(fit_lo.sigma_loc):
-                    txt_lines.append(
-                        r"$\sigma_{loc} = (%.2e \pm %.1e)\ \mu m$"
-                        % (fit_lo.sigma_loc, fit_lo.sigma_loc_error)
-                    )
-                txt_lines.append(r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red)
                 _save_fit_plot(
                     fit_lo.tau_fit, fit_lo.msd_fit, fit_lo.msd_predicted,
                     "\n".join(txt_lines),

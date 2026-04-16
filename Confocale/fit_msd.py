@@ -99,22 +99,15 @@ def _run_linear_offset(msd_result, args, output_dir: Path) -> None:
         fit_fraction=args.fit_fraction,
         msd_sigma=msd_result.msd_sem,
     )
-    sigma_str = (f"  σ_loc = ({fit.sigma_loc:.4e} ± {fit.sigma_loc_error:.2e}) µm"
-                 if np.isfinite(fit.sigma_loc) else "  σ_loc = N/A (c < 0)")
     print(f"\n  D  = ({fit.D:.4e} ± {fit.D_error:.2e}) μm²/s")
     print(f"  c  = ({fit.offset:.4e} ± {fit.offset_error:.2e}) μm²")
-    print(sigma_str)
     print(f"  χ²_ν = {fit.chi_squared_red:.4f}")
 
     txt_lines = [
         r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit.D, fit.D_error),
         r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit.offset, fit.offset_error),
+        r"$\chi^2_\nu = %.4f$" % fit.chi_squared_red,
     ]
-    if np.isfinite(fit.sigma_loc):
-        txt_lines.append(
-            r"$\sigma_{loc} = (%.2e \pm %.1e)\ \mu m$" % (fit.sigma_loc, fit.sigma_loc_error)
-        )
-    txt_lines.append(r"$\chi^2_\nu = %.4f$" % fit.chi_squared_red)
     txt = "\n".join(txt_lines)
     out = output_dir / f"{Path(args.csv).stem}_linear_offset_fit.svg"
     _plot_fit(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
