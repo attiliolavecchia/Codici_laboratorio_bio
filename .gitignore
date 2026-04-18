@@ -33,6 +33,8 @@
 !/Confocale/check_ergodicity.py
 !/Confocale/comp_glycerol_viscosity.py
 !/Confocale/diffusion_statistics.py
+!/Confocale/diffusion_statistics_anomalous.py
+
 
 
 !/2_Fotoni/flim_data_reader.py

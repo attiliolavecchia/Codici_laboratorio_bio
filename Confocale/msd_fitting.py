@@ -470,7 +470,7 @@ def _fit_anomalous_at_fraction(
     msd_pred = anomalous_msd_model(tau_f, Da, a)
     rss = calculate_rss(msd_f, msd_pred)
     chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 2) if sigma_f is not None else float("nan")
-    return Da, Da_err, a, a_err, pcov, tau_f, msd_f, msd_pred, chi2, rss
+    return Da, Da_err, a, a_err, pcov, tau_f, msd_f, msd_pred, chi2, rss, sigma_f
 
 
 def fit_msd_anomalous(
@@ -493,7 +493,7 @@ def fit_msd_anomalous(
     print(f"\nTesting intervals {fractions[0]:.0%}–{fractions[-1]:.0%} …")
     for frac in fractions:
         try:
-            Da, Da_err, a, a_err, pcov, tau_f, msd_f, msd_p, chi2, rss = _fit_anomalous_at_fraction(
+            Da, Da_err, a, a_err, pcov, tau_f, msd_f, msd_p, chi2, rss, sig = _fit_anomalous_at_fraction(
                 tau, msd, n_max, dt, frac,
                 D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds, msd_sigma,
             )
@@ -516,6 +516,113 @@ def fit_msd_anomalous(
         chi_squared_red=chi2, RSS=rss,
         optimal_fraction=optimal, n_fit_steps=n_steps,
         interval_results=interval_results,
+    )
+
+
+# ===================================================================
+# Model 3b — Anomalous + offset: MSD = 4D_α·τ^α + c  (c = 4σ²)
+# ===================================================================
+
+@dataclass(frozen=True)
+class AnomalousOffsetFitResult:
+    """Result of an anomalous+offset MSD fit (localization error)."""
+    D_alpha: float
+    D_alpha_error: float
+    alpha: float
+    alpha_error: float
+    offset: float           # c in MSD = 4D_α τ^α + c
+    offset_error: float
+    sigma_loc: float        # σ = sqrt(c/4) if c > 0, else NaN
+    sigma_loc_error: float  # propagated error
+    pcov: np.ndarray
+    tau_fit: np.ndarray
+    msd_fit: np.ndarray
+    msd_predicted: np.ndarray
+    chi_squared_red: float
+    msd_sigma_fit: Optional[np.ndarray] = None
+
+
+def anomalous_offset_msd_model(tau: np.ndarray, D_alpha: float, alpha: float, c: float) -> np.ndarray:
+    """MSD(τ) = 4D_α·τ^α + c"""
+    return 4.0 * D_alpha * np.power(tau, alpha) + c
+
+
+def _fit_anomalous_offset_at_fraction(
+    tau, msd, n_max, dt, frac,
+    D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds,
+    c_initial, c_bounds, msd_sigma,
+):
+    tau_f, msd_f, sigma_f = _select_fit_data(
+        tau, msd, n_max, dt, frac, min_points=4, msd_sigma=msd_sigma,
+        require_positive_tau=True,
+    )
+    popt, pcov = curve_fit(
+        anomalous_offset_msd_model, tau_f, msd_f,
+        p0=[D_alpha_initial, alpha_initial, c_initial],
+        bounds=(
+            [D_alpha_bounds[0], alpha_bounds[0], c_bounds[0]],
+            [D_alpha_bounds[1], alpha_bounds[1], c_bounds[1]],
+        ),
+        method="trf", maxfev=5000,
+        **({"sigma": sigma_f, "absolute_sigma": True} if sigma_f is not None else {}),
+    )
+    Da, a, c = float(popt[0]), float(popt[1]), float(popt[2])
+    fin = pcov is not None and np.all(np.isfinite(pcov))
+    Da_err = float(np.sqrt(pcov[0, 0])) if fin else float("nan")
+    a_err = float(np.sqrt(pcov[1, 1])) if fin else float("nan")
+    c_err = float(np.sqrt(pcov[2, 2])) if fin else float("nan")
+
+    msd_pred = anomalous_offset_msd_model(tau_f, Da, a, c)
+    rss = calculate_rss(msd_f, msd_pred)
+    chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 3) if sigma_f is not None else float("nan")
+    return Da, Da_err, a, a_err, c, c_err, pcov, tau_f, msd_f, msd_pred, chi2, rss, sigma_f
+
+
+def fit_msd_anomalous_offset(
+    tau: np.ndarray,
+    msd: np.ndarray,
+    n_max: int,
+    dt: float,
+    fit_fraction: float = 0.10,
+    D_alpha_initial: float = 1e-2,
+    D_alpha_bounds: Tuple[float, float] = (1e-6, 1e2),
+    alpha_initial: float = 1.0,
+    alpha_bounds: Tuple[float, float] = (0.01, 2.0),
+    c_initial: float = 0.0,
+    c_bounds: Tuple[float, float] = (-1.0, 10.0),
+    msd_sigma: Optional[np.ndarray] = None,
+) -> AnomalousOffsetFitResult:
+    """Fit MSD to anomalous+offset model: MSD = 4D_α·τ^α + c  (c = 4σ²)."""
+    tau = np.asarray(tau, dtype=float)
+    msd = np.asarray(msd, dtype=float)
+    if tau.shape != msd.shape or tau.size == 0:
+        raise ValueError("tau and msd must be non-empty arrays of the same shape")
+    if not (0 < fit_fraction <= 1.0):
+        raise ValueError(f"fit_fraction must be in (0, 1], got {fit_fraction}")
+
+    Da, Da_err, a, a_err, c_opt, c_err, pcov, tau_f, msd_f, msd_pred, chi2, rss, sigma_f = \
+        _fit_anomalous_offset_at_fraction(
+            tau, msd, n_max, dt, fit_fraction,
+            D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds,
+            c_initial, c_bounds, msd_sigma,
+        )
+
+    # Derive localization error: σ = sqrt(c/4)
+    if c_opt > 0:
+        sigma_loc = float(np.sqrt(c_opt / 4.0))
+        sigma_loc_err = c_err / (4.0 * sigma_loc) if sigma_loc > 0 else float("nan")
+    else:
+        sigma_loc = float("nan")
+        sigma_loc_err = float("nan")
+
+    return AnomalousOffsetFitResult(
+        D_alpha=Da, D_alpha_error=Da_err,
+        alpha=a, alpha_error=a_err,
+        offset=c_opt, offset_error=c_err,
+        sigma_loc=sigma_loc, sigma_loc_error=sigma_loc_err,
+        pcov=pcov,
+        tau_fit=tau_f, msd_fit=msd_f, msd_predicted=msd_pred,
+        chi_squared_red=chi2, msd_sigma_fit=sigma_f,
     )
 
 
@@ -574,7 +681,7 @@ def _fit_anomalous_drift_at_fraction(
     msd_pred = anomalous_drift_msd_model(tau_f, Da, a, v)
     rss = calculate_rss(msd_f, msd_pred)
     chi2 = calculate_reduced_chi_squared(msd_f, msd_pred, sigma_f, 3) if sigma_f is not None else float("nan")
-    return Da, Da_err, a, a_err, v, v_err, pcov, tau_f, msd_f, msd_pred, chi2, rss
+    return Da, Da_err, a, a_err, v, v_err, pcov, tau_f, msd_f, msd_pred, chi2, rss, sigma_f
 
 
 def fit_msd_anomalous_drift(
@@ -598,7 +705,7 @@ def fit_msd_anomalous_drift(
     print(f"\nTesting intervals {fractions[0]:.0%}–{fractions[-1]:.0%} …")
     for frac in fractions:
         try:
-            Da, Da_err, a, a_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2, rss = _fit_anomalous_drift_at_fraction(
+            Da, Da_err, a, a_err, v, v_err, pcov, tau_f, msd_f, msd_p, chi2, rss, sig = _fit_anomalous_drift_at_fraction(
                 tau, msd, n_max, dt, frac,
                 D_alpha_initial, D_alpha_bounds, alpha_initial, alpha_bounds,
                 velocity_stats.v_initial, velocity_stats.v_bounds, msd_sigma,
