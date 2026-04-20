@@ -32,6 +32,7 @@ from msd_fitting import (
     fit_msd_nonlinear, nonlinear_msd_model, analyze_velocities,
     fit_msd_anomalous, anomalous_msd_model,
     fit_msd_anomalous_drift, anomalous_drift_msd_model,
+    fit_msd_anomalous_offset, anomalous_offset_msd_model,
 )
 from plot_msd import plot_and_save
 
@@ -46,10 +47,10 @@ DATASETS = {
 # Which fit models to run per dataset
 DATASET_MODELS = {
     "no_anomalous": ["linear", "nonlinear"],
-    "anomalous":    ["anomalous", "anomalous_drift"],
+    "anomalous":    ["anomalous_offset"],
 }
 
-LAG_FRACTIONS = [0.10, 0.25, 0.50, 1.0]
+LAG_FRACTIONS = [0.10, 0.25]
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +100,9 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
     eamsd_dir.mkdir(parents=True, exist_ok=True)
     tamsd_dir.mkdir(parents=True, exist_ok=True)
 
+    # Use drift correction for anomalous datasets
+    use_drift_corr = (label == "anomalous")
+
     # Select the longest track for TA-MSD
     longest_id = max(trajectories.keys(), key=lambda k: trajectories[k].n_points)
     track = trajectories[longest_id]
@@ -109,7 +113,10 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
 
         # EA-MSD
         try:
-            ea = calculate_ensemble_msd(trajectories, max_lag_fraction=frac)
+            ea = calculate_ensemble_msd(
+                trajectories, max_lag_fraction=frac,
+                drift_corrected=use_drift_corr,
+            )
             if ea.tau.size > 0:
                 out = eamsd_dir / f"{stem}_eamsd_{tag}.svg"
                 plot_and_save(ea.tau, ea.msd, out, msd_sem=ea.msd_sem,
@@ -120,7 +127,9 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
 
         # TA-MSD
         try:
-            ta = calculate_time_averaged_msd_per_track(track, max_lag_fraction=frac)
+            ta = calculate_time_averaged_msd_per_track(
+                track, max_lag_fraction=frac, drift_corrected=use_drift_corr,
+            )
             if ta.tau.size > 0:
                 out = tamsd_dir / f"{stem}_tamsd_{tag}.svg"
                 plot_and_save(ta.tau, ta.msd, out, msd_sem=ta.msd_sem,
@@ -138,7 +147,9 @@ def run_fits(csv_file: Path, label: str) -> list[dict]:
         print(f"    No trajectories in {csv_file.name}")
         return []
 
-    msd_result = calculate_ensemble_msd(trajectories)
+    # Use drift-corrected eaMSD for anomalous datasets
+    use_drift_corr = (label == "anomalous")
+    msd_result = calculate_ensemble_msd(trajectories, drift_corrected=use_drift_corr)
     if msd_result.tau.size == 0:
         print(f"    Empty MSD for {csv_file.name}")
         return []
@@ -222,24 +233,23 @@ def _run_single_fit(model, msd_result, trajectories, stem,
                     v="N/A", v_err="N/A",
                     chi2_red=f"{fit.chi_squared_red:.4f}")
 
-    elif model == "anomalous_drift":
-        vstats = analyze_velocities(trajectories)
-        fit = fit_msd_anomalous_drift(tau, msd, n_max, dt,
-                                      velocity_stats=vstats, msd_sigma=sigma)
+    elif model == "anomalous_offset":
+        fit = fit_msd_anomalous_offset(tau, msd, n_max, dt, msd_sigma=sigma)
         txt = "\n".join([
             r"$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$" % (fit.D_alpha, fit.D_alpha_error),
             r"$\alpha = %.4f \pm %.4f$" % (fit.alpha, fit.alpha_error),
-            r"$v = (%.2e \pm %.1e)\ \mu m/s$" % (fit.v, fit.v_error),
+            r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit.offset, fit.offset_error),
             r"$\chi^2_\nu = %.4f$" % fit.chi_squared_red,
         ])
-        out = nonlinear_dir / f"{stem}_anomalous_drift_fit.svg"
+        out = linear_dir / f"{stem}_anomalous_offset_fit.svg"
         _save_fit_plot(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
-                       r"Anomalous+drift: MSD = 4$D_\alpha \tau^\alpha$ + $v^2\tau^2$", out)
+                       r"Drift-corr. anom.+offset: 4$D_\alpha \tau^\alpha$ + $c$", out,
+                       fit.msd_sigma_fit)
         return dict(Dataset=dataset_label, File=filename,
-                    Model="AnomalousDrift (4D_α τ^α + v²τ²)",
+                    Model="AnomalousOffset (4D_α τ^α + c)",
                     D=f"{fit.D_alpha:.4e}", D_err=f"{fit.D_alpha_error:.2e}",
                     alpha=f"{fit.alpha:.4f}", alpha_err=f"{fit.alpha_error:.4f}",
-                    v=f"{fit.v:.4e}", v_err=f"{fit.v_error:.2e}",
+                    v="N/A", v_err="N/A",
                     chi2_red=f"{fit.chi_squared_red:.4f}")
 
     raise ValueError(f"Unknown model: {model}")
@@ -276,7 +286,7 @@ def main() -> None:
     all_summary: list[dict] = []
 
     for label, data_dir in DATASETS.items():
-        files = sorted(data_dir.glob("*.csv"))
+        files = sorted(data_dir.rglob("*.csv"))
         if not files:
             print(f"No CSV files in {data_dir}")
             continue

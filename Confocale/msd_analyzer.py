@@ -110,11 +110,41 @@ def calculate_initial_displacement_msd_per_track(track: Trajectory, maximum_lag_
     return per_lag_values
 
 
+def _collect_initial_displacements_per_track(
+    track: Trajectory, maximum_lag_steps: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Collect per-lag Δx and Δy (signed, not squared) for drift-corrected MSD.
+
+    For each lag n = 1..maximum_lag_steps:
+        dx[n-1] = x[n] - x[0],   dy[n-1] = y[n] - y[0]
+
+    Returns:
+        (dx_array, dy_array) each of shape (maximum_lag_steps,), with NaN
+        for lags beyond the track length.
+    """
+    num_points = track.n_points
+    dx_arr = np.full(maximum_lag_steps, np.nan, dtype=float)
+    dy_arr = np.full(maximum_lag_steps, np.nan, dtype=float)
+
+    if num_points < 2:
+        return dx_arr, dy_arr
+
+    x = np.asarray(track.x, dtype=float)
+    y = np.asarray(track.y, dtype=float)
+    x0, y0 = x[0], y[0]
+
+    max_valid = min(maximum_lag_steps, num_points - 1)
+    dx_arr[:max_valid] = x[1:max_valid + 1] - x0
+    dy_arr[:max_valid] = y[1:max_valid + 1] - y0
+    return dx_arr, dy_arr
+
+
 def calculate_ensemble_msd(
     trajectories: Mapping[Union[int, str], Trajectory],
     *,
     max_lag_fraction: Optional[float] = None,
     global_dt: Optional[float] = None,
+    drift_corrected: bool = True,
 ) -> MSDResult:
     """Compute the 2D ensemble-averaged MSD as a function of lag time τ.
 
@@ -127,6 +157,13 @@ def calculate_ensemble_msd(
         3) Average those per-trajectory values equally across trajectories for each lag (NaNs ignored).
         4) Convert lag steps (n) to τ = n Δt using a global Δt (seconds).
 
+    When ``drift_corrected=True``, the variance method is used instead of the
+    raw ensemble mean (Michalet 2010, Phys. Rev. E 82, 041914):
+
+        MSD_corr(n) = Var(Δx_n) + Var(Δy_n)
+
+    This removes the coherent drift component |⟨Δr⟩|² from the MSD.
+
     Args:
         trajectories: Mapping of Track ID to Trajectory.
         max_lag_fraction: Optional fraction (0 < f ≤ 1] of the longest trajectory's points
@@ -134,6 +171,8 @@ def calculate_ensemble_msd(
             If None, use f = 1.0 (i.e., up to N_max−1).
         global_dt: Optional override for Δt in seconds. If None, a robust estimate is used
             (median of per-trajectory dt values > 0).
+        drift_corrected: If True, subtract the ensemble-mean displacement squared
+            from the MSD at each lag (variance method).
 
     Returns:
         MSDResult with:
@@ -161,14 +200,41 @@ def calculate_ensemble_msd(
 
     tau = build_tau_array(maximum_lag_steps, global_dt)
 
-    per_track_values: List[np.ndarray] = []
-    for track in trajectories.values():
-        values = calculate_initial_displacement_msd_per_track(track, maximum_lag_steps)
-        per_track_values.append(values)
+    if drift_corrected:
+        # Variance method: MSD_corr(n) = Var(Δx_n) + Var(Δy_n)
+        dx_all: List[np.ndarray] = []
+        dy_all: List[np.ndarray] = []
+        for track in trajectories.values():
+            dx, dy = _collect_initial_displacements_per_track(track, maximum_lag_steps)
+            dx_all.append(dx)
+            dy_all.append(dy)
 
-    msd_values, msd_std, tracks_per_lag = average_across_trajectories(per_track_values)
-    with np.errstate(invalid='ignore'):
-        msd_sem = msd_std / np.sqrt(tracks_per_lag.astype(float))
+        dx_stack = np.vstack(dx_all)  # (M, K)
+        dy_stack = np.vstack(dy_all)  # (M, K)
+
+        # Per-lag variance (ignoring NaN for short tracks)
+        with np.errstate(invalid='ignore'):
+            msd_values = np.nanvar(dx_stack, axis=0, ddof=1) + np.nanvar(dy_stack, axis=0, ddof=1)
+            tracks_per_lag = np.sum(np.isfinite(dx_stack), axis=0).astype(int)
+
+            # SEM for the variance estimator: SE(Var) ≈ Var * sqrt(2/(M-1))
+            # Combined SE for Var_x + Var_y propagated in quadrature
+            var_x = np.nanvar(dx_stack, axis=0, ddof=1)
+            var_y = np.nanvar(dy_stack, axis=0, ddof=1)
+            M = tracks_per_lag.astype(float)
+            se_var_x = var_x * np.sqrt(2.0 / np.maximum(M - 1, 1))
+            se_var_y = var_y * np.sqrt(2.0 / np.maximum(M - 1, 1))
+            msd_sem = np.sqrt(se_var_x**2 + se_var_y**2)
+            msd_std = msd_values * np.sqrt(2.0 / np.maximum(M - 1, 1))
+    else:
+        per_track_values: List[np.ndarray] = []
+        for track in trajectories.values():
+            values = calculate_initial_displacement_msd_per_track(track, maximum_lag_steps)
+            per_track_values.append(values)
+
+        msd_values, msd_std, tracks_per_lag = average_across_trajectories(per_track_values)
+        with np.errstate(invalid='ignore'):
+            msd_sem = msd_std / np.sqrt(tracks_per_lag.astype(float))
 
     return MSDResult(
         tau=tau,
@@ -189,6 +255,7 @@ def calculate_time_averaged_msd_per_track(
     *,
     max_lag_fraction: Optional[float] = None,
     dt_override: Optional[float] = None,
+    drift_corrected: bool = True,
 ) -> MSDResult:
     """Compute the time-averaged MSD (TAMSD) for a single trajectory.
 
@@ -200,6 +267,9 @@ def calculate_time_averaged_msd_per_track(
     available points. The result is returned in the same ``MSDResult`` container
     used elsewhere for convenient plotting alongside ensemble MSD.
 
+    When ``drift_corrected=True``, a linear drift is estimated via least-squares
+    regression on (t, x) and (t, y) and subtracted before computing TAMSD.
+
     Args:
         track: The single trajectory to analyze.
         max_lag_fraction: Optional fraction (0 < f ≤ 1] of the track length to cap
@@ -207,6 +277,8 @@ def calculate_time_averaged_msd_per_track(
         dt_override: If provided, this Δt (seconds) is used to convert steps to seconds.
             Otherwise we use ``track.dt`` if finite and positive; if that is
             not available, we fall back to 1.0 seconds.
+        drift_corrected: If True, subtract a linear drift (estimated by regression)
+            from the trajectory before computing TAMSD.
 
     Returns:
         MSDResult with fields populated for this single-trajectory TAMSD:
@@ -236,6 +308,15 @@ def calculate_time_averaged_msd_per_track(
 
     x = np.asarray(track.x, dtype=float)
     y = np.asarray(track.y, dtype=float)
+
+    if drift_corrected:
+        t = np.asarray(track.time, dtype=float)
+        # Subtract linear drift estimated by least-squares regression
+        # x_corr = x - (vx * t + bx), y_corr = y - (vy * t + by)
+        vx, bx = np.polyfit(t, x, 1)
+        vy, by = np.polyfit(t, y, 1)
+        x = x - (vx * t + bx)
+        y = y - (vy * t + by)
 
     tamsd = np.full(K, np.nan, dtype=float)
     tamsd_std = np.full(K, np.nan, dtype=float)

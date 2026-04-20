@@ -54,13 +54,20 @@ OUT_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "ergodicity"
 D_FIT_FRACTION = 0.10  # Fit D on first 10% of lag points
 
 
-def compute_ensemble_tamsd(trajectories, *, max_lag_fraction=None, global_dt=None):
-    """Compute the ensemble-averaged TA-MSD: average TA-MSD across all tracks.
+def compute_ensemble_tamsd(trajectories, max_lag_fraction=None, global_dt=None,
+                           drift_corrected=False):
+    """Compute the ensemble-averaged time-averaged MSD  ⟨TA-MSD⟩.
 
     For each trajectory we compute the full time-averaged MSD, then we
     average those curves across trajectories (same procedure as the EA-MSD
     averaging, but starting from TA-MSD per track instead of single initial
     displacements).
+
+    Parameters
+    ----------
+    drift_corrected : bool
+        If True, pass ``drift_corrected=True`` to each per-track TA-MSD
+        computation (linear drift subtraction via regression).
 
     Returns (tau, msd_mean, msd_sem, per_track_matrix) where
     *per_track_matrix* is a (M, K) float array of individual TA-MSD curves
@@ -82,6 +89,7 @@ def compute_ensemble_tamsd(trajectories, *, max_lag_fraction=None, global_dt=Non
     for track in trajectories.values():
         res = calculate_time_averaged_msd_per_track(
             track, max_lag_fraction=max_lag_fraction, dt_override=global_dt,
+            drift_corrected=drift_corrected,
         )
         # Pad / trim to K entries
         arr = np.full(K, np.nan, dtype=float)

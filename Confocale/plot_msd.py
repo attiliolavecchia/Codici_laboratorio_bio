@@ -42,8 +42,8 @@ def main() -> None:
                         help="eamsd = ensemble-averaged MSD, tamsd = time-averaged MSD")
     parser.add_argument("--track-id", default=None,
                         help="Track ID for taMSD (default: first track by sorted ID)")
-    parser.add_argument("--max-lag-fraction", type=float, default=None,
-                        help="Fraction (0<f<=1] of track to cap max lag; omit for full range")
+    parser.add_argument("--max-lag-fraction", type=float, default=0.25,
+                        help="Fraction (0<f<=1] of track to cap max lag; default 0.25 (first 25%%)")
     parser.add_argument("--output", default=None,
                         help="Output image path (default: auto-generated in eamsd_plots/ or tamsd_plots/)")
     args = parser.parse_args()

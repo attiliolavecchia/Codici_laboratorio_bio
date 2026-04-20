@@ -246,11 +246,11 @@ def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 def _prompt_max_lag_fraction() -> float | None:
     print("\nOptional: choose lag extent as a fraction of available points (0 < f <= 1).")
-    print("Press Enter for full range (use N_max - 1).")
+    print("Press Enter for default (0.25 = first 25%).")
     while True:
-        s = input("Max lag fraction [blank = full]: ").strip()
+        s = input("Max lag fraction [blank = 0.25]: ").strip()
         if s == "":
-            return None
+            return 0.25
         try:
             f = float(s)
         except ValueError:

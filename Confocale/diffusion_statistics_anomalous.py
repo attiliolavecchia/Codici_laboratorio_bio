@@ -2,7 +2,7 @@
 Rigorous statistical analysis of anomalous diffusion parameters D_α and α.
 
 Mirrors ``diffusion_statistics.py`` for the anomalous dataset, using
-anomalous MSD models instead of linear/nonlinear.
+drift-corrected MSD (variance method) and the anomalous+offset model.
 
 Workflow
 --------
@@ -11,22 +11,25 @@ Workflow
 3. Per-file  ⟨taMSD⟩ fitting → one (D_α, α) per CSV file
 4. Histograms of D_α and α for each estimator
 5. Summary comparison and statistics
+6. Comparison of D_α with D_SE (Stokes-Einstein upper bound, no PEG)
 
-Models (anomalous equivalents of linear / linear_offset / nonlinear):
-    anomalous:        MSD(τ) = 4D_α τ^α
+Drift correction:
+    eaMSD:  variance method — MSD_corr(τ) = Var(Δx) + Var(Δy)
+    taMSD:  per-track linear drift subtraction via regression
+
+Model (after drift correction):
     anomalous_offset: MSD(τ) = 4D_α τ^α + c   (c = 4σ², localization error)
-    anomalous_drift:  MSD(τ) = 4D_α τ^α + v²τ²
 
 Fit fractions: 10 % and 25 %
 Dataset: anomalous only (Data/14_11_anomalous)
-    ─ glicerolo50:   240nm beads in 50 % glycerol
-    ─ glicerolo200:  240nm beads in concentrated glycerol (200×)
+    ─ glicerolo50:   240nm beads in PEG 15% + glycerol 50% + H₂O 35%
+    ─ glicerolo200:  240nm beads in PEG 18% + glycerol 40% + H₂O 42%
 
 Output (SVG for paper, CSV for data):
     Results/anomalous/diffusion_statistics/     — histograms
-    Results/anomalous/linear_fits/              — anomalous + anomalous_offset fit plots
-    Results/anomalous/nonlinear_fits/           — anomalous_drift fit plots
+    Results/anomalous/linear_offset_fits/       — anomalous_offset fit plots
     Docu/diffusion_statistics_anomalous_*.csv   — tabular results
+    Docu/diffusion_drift_corrected_vs_DSE.csv   — D_α / D_SE comparison
 
 Usage:
     python diffusion_statistics_anomalous.py                  # full analysis
@@ -47,33 +50,36 @@ import pandas as pd
 from scipy import stats
 
 from check_ergodicity import compute_ensemble_tamsd
+from comp_glycerol_viscosity import diffusion_coefficient
 from data_reader import read_trajectories_from_csv, estimate_global_time_step
 from msd_analyzer import calculate_ensemble_msd, calculate_time_averaged_msd_per_track
 from msd_fitting import (
     fit_msd_anomalous_offset,
     anomalous_offset_msd_model,
-    _fit_anomalous_at_fraction,
-    anomalous_msd_model,
-    _fit_anomalous_drift_at_fraction,
-    anomalous_drift_msd_model,
-    analyze_velocities,
 )
 
 # ── Configuration ──────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "Data" / "14_11_anomalous"
 STATS_DIR = SCRIPT_DIR / "Results" / "anomalous" / "diffusion_statistics"
-LINEAR_DIR = SCRIPT_DIR / "Results" / "anomalous" / "linear_fits"
 LINEAR_OFFSET_DIR = SCRIPT_DIR / "Results" / "anomalous" / "linear_offset_fits"
-NONLINEAR_DIR = SCRIPT_DIR / "Results" / "anomalous" / "nonlinear_fits"
 DOC_DIR = SCRIPT_DIR / "Docu"
 
 MIN_TRACK_POINTS = 30
 FIT_FRACTIONS = [0.10, 0.25]
 
-# File grouping
-GLIC50_PATTERN = "240nm_glicerolo50"
-GLIC200_PATTERN = "240nm_glicerolo200"
+# Subdirectory names for grouping
+GLIC50_SUBDIR = "PEG_15_Glicerolo_50_H2O_35"
+GLIC200_SUBDIR = "PEG_18_Glicerolo_40_H2O_42"
+
+# D_SE upper bounds (Stokes-Einstein, glycerol/water only, no PEG)
+# T = 23 °C, r = 120 nm, c_m = glycerol/(glycerol+water)
+T_CELSIUS = 23.0
+R_PARTICLE = 120e-9  # metres
+D_SE = {
+    "glic50":  diffusion_coefficient(T_CELSIUS, 0.5882, R_PARTICLE) * 1e12,  # µm²/s
+    "glic200": diffusion_coefficient(T_CELSIUS, 0.4893, R_PARTICLE) * 1e12,  # µm²/s
+}
 
 
 # ── Plotting helpers ───────────────────────────────────────────────────
@@ -139,19 +145,20 @@ def _plot_histogram(values, xlabel, output_path,
 # ── File grouping ──────────────────────────────────────────────────────
 
 def group_csv_files(data_dir: Path):
-    """Split CSV files into glicerolo50 and glicerolo200 groups."""
-    all_csv = sorted(data_dir.glob("*.csv"))
-    glic50 = [f for f in all_csv if GLIC50_PATTERN in f.name]
-    glic200 = [f for f in all_csv if GLIC200_PATTERN in f.name]
+    """Split CSV files into glicerolo50 and glicerolo200 groups using subdirectories."""
+    glic50_dir = data_dir / GLIC50_SUBDIR
+    glic200_dir = data_dir / GLIC200_SUBDIR
+    glic50 = sorted(glic50_dir.glob("*.csv")) if glic50_dir.is_dir() else []
+    glic200 = sorted(glic200_dir.glob("*.csv")) if glic200_dir.is_dir() else []
     return {"glic50": glic50, "glic200": glic200}
 
 
 # ── Core analysis — per-track taMSD ────────────────────────────────────
 
 def extract_per_track_D(csv_files):
-    """Fit taMSD per track → collect (D_α, α) for every model×fraction.
+    """Fit drift-corrected taMSD per track → collect (D_α, α) with anomalous_offset model.
 
-    Returns a DataFrame with one row per (track, file, model, fraction).
+    Returns a DataFrame with one row per (track, file, fraction).
     """
     rows = []
 
@@ -166,12 +173,6 @@ def extract_per_track_D(csv_files):
 
         global_dt = estimate_global_time_step(trajectories)
 
-        # Global velocity stats for anomalous_drift fits (per-file)
-        try:
-            vstats = analyze_velocities(trajectories, min_points=MIN_TRACK_POINTS)
-        except ValueError:
-            vstats = None
-
         eligible = {tid: t for tid, t in trajectories.items()
                     if t.n_points >= MIN_TRACK_POINTS}
         print(f"  Tracks >= {MIN_TRACK_POINTS} pts: {len(eligible)} / {len(trajectories)}")
@@ -180,9 +181,10 @@ def extract_per_track_D(csv_files):
             for frac in FIT_FRACTIONS:
                 pct = int(frac * 100)
 
-                # Compute taMSD for this track
+                # Compute drift-corrected taMSD for this track
                 tamsd = calculate_time_averaged_msd_per_track(
                     track, max_lag_fraction=frac, dt_override=global_dt,
+                    drift_corrected=True,
                 )
                 if tamsd.tau.size < 4:
                     continue
@@ -191,27 +193,6 @@ def extract_per_track_D(csv_files):
                     file=stem, track_id=str(tid), n_points=track.n_points,
                     fraction=frac, dt=global_dt,
                 )
-
-                # ── Anomalous fit (4D_α τ^α) ──────────────────
-                try:
-                    Da, Da_err, a, a_err, _pcov, tau_f, msd_f, msd_p, chi2, _rss, _sig = \
-                        _fit_anomalous_at_fraction(
-                            tamsd.tau, tamsd.msd, tamsd.n_max, tamsd.dt,
-                            1.0,  # already capped by max_lag_fraction
-                            1e-2, (1e-6, 1e2),
-                            1.0, (0.01, 2.0),
-                            tamsd.msd_sem,
-                        )
-                    rows.append({
-                        **base_row,
-                        "model": "anomalous",
-                        "D_alpha": Da, "D_alpha_error": Da_err,
-                        "alpha": a, "alpha_error": a_err,
-                        "chi2_red": chi2,
-                        "v": np.nan, "v_error": np.nan,
-                    })
-                except (ValueError, RuntimeError):
-                    pass
 
                 # ── Anomalous+offset fit (4D_α τ^α + c) ───────
                 try:
@@ -226,36 +207,10 @@ def extract_per_track_D(csv_files):
                         "D_alpha": fit_ao.D_alpha, "D_alpha_error": fit_ao.D_alpha_error,
                         "alpha": fit_ao.alpha, "alpha_error": fit_ao.alpha_error,
                         "chi2_red": fit_ao.chi_squared_red,
-                        "v": np.nan, "v_error": np.nan,
                         "offset": fit_ao.offset, "offset_error": fit_ao.offset_error,
                     })
                 except (ValueError, RuntimeError):
                     pass
-
-                # ── Anomalous+drift fit (4D_α τ^α + v²τ²) ─────
-                if vstats is not None:
-                    try:
-                        Da, Da_err, a, a_err, v, v_err, _pcov, \
-                            tau_f, msd_f, msd_p, chi2, _rss, _sig = \
-                            _fit_anomalous_drift_at_fraction(
-                                tamsd.tau, tamsd.msd,
-                                tamsd.n_max, tamsd.dt,
-                                1.0,  # already capped
-                                1e-2, (1e-6, 1e2),
-                                1.0, (0.01, 2.0),
-                                vstats.v_initial, vstats.v_bounds,
-                                tamsd.msd_sem,
-                            )
-                        rows.append({
-                            **base_row,
-                            "model": "anomalous_drift",
-                            "D_alpha": Da, "D_alpha_error": Da_err,
-                            "alpha": a, "alpha_error": a_err,
-                            "chi2_red": chi2,
-                            "v": v, "v_error": v_err,
-                        })
-                    except (ValueError, RuntimeError):
-                        pass
 
         print(f"  Collected {sum(1 for r in rows if r['file'] == stem)} fit results.")
 
@@ -267,9 +222,9 @@ def extract_per_track_D(csv_files):
 # ── Core analysis — per-file eaMSD ────────────────────────────────────
 
 def extract_per_file_D(csv_files):
-    """Fit eaMSD per file → one (D_α, α) per CSV for each model×fraction.
+    """Fit drift-corrected eaMSD per file → one (D_α, α) per CSV with anomalous_offset.
 
-    Returns a DataFrame with one row per (file, model, fraction).
+    Returns a DataFrame with one row per (file, fraction).
     """
     rows = []
 
@@ -282,15 +237,12 @@ def extract_per_file_D(csv_files):
             print("  No trajectories — skipping.")
             continue
 
-        try:
-            vstats = analyze_velocities(trajectories, min_points=MIN_TRACK_POINTS)
-        except ValueError:
-            vstats = None
-
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
 
-            eamsd = calculate_ensemble_msd(trajectories, max_lag_fraction=frac)
+            eamsd = calculate_ensemble_msd(
+                trajectories, max_lag_fraction=frac, drift_corrected=True,
+            )
             if eamsd.tau.size < 4:
                 continue
 
@@ -298,40 +250,6 @@ def extract_per_file_D(csv_files):
                 file=stem, n_tracks=eamsd.total_trajectories,
                 fraction=frac, dt=eamsd.dt,
             )
-
-            # ── Anomalous fit (4D_α τ^α) ──────────────────────
-            try:
-                Da, Da_err, a, a_err, _pcov, tau_f, msd_f, msd_p, chi2, _rss, sig = \
-                    _fit_anomalous_at_fraction(
-                        eamsd.tau, eamsd.msd, eamsd.n_max, eamsd.dt,
-                        1.0,  # data already capped
-                        1e-2, (1e-6, 1e2),
-                        1.0, (0.01, 2.0),
-                        eamsd.msd_sem,
-                    )
-                rows.append({
-                    **base_row,
-                    "model": "anomalous",
-                    "D_alpha": Da, "D_alpha_error": Da_err,
-                    "alpha": a, "alpha_error": a_err,
-                    "chi2_red": chi2,
-                    "v": np.nan, "v_error": np.nan,
-                })
-
-                tag = f"f{pct:03d}"
-                txt = "\n".join([
-                    r"$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$" % (Da, Da_err),
-                    r"$\alpha = %.4f \pm %.4f$" % (a, a_err),
-                    r"$\chi^2_\nu = %.4f$" % chi2,
-                ])
-                _save_fit_plot(
-                    tau_f, msd_f, msd_p, txt,
-                    r"Anomalous: MSD = 4$D_\alpha\tau^\alpha$",
-                    LINEAR_DIR / f"{stem}_eamsd_anomalous_{tag}.svg",
-                    sig, data_color="C0",
-                )
-            except (ValueError, RuntimeError) as e:
-                print(f"    anomalous {pct}%: FAILED — {e}")
 
             # ── Anomalous+offset fit (4D_α τ^α + c) ───────────
             try:
@@ -346,7 +264,6 @@ def extract_per_file_D(csv_files):
                     "D_alpha": fit_ao.D_alpha, "D_alpha_error": fit_ao.D_alpha_error,
                     "alpha": fit_ao.alpha, "alpha_error": fit_ao.alpha_error,
                     "chi2_red": fit_ao.chi_squared_red,
-                    "v": np.nan, "v_error": np.nan,
                     "offset": fit_ao.offset, "offset_error": fit_ao.offset_error,
                 })
 
@@ -360,51 +277,13 @@ def extract_per_file_D(csv_files):
                 _save_fit_plot(
                     fit_ao.tau_fit, fit_ao.msd_fit, fit_ao.msd_predicted,
                     "\n".join(txt_lines),
-                    r"Anomalous+offset: MSD = 4$D_\alpha\tau^\alpha$ + $c$",
+                    r"Drift-corr. anom.+offset: 4$D_\alpha\tau^\alpha$ + $c$",
                     LINEAR_OFFSET_DIR / f"{stem}_eamsd_anomalous_offset_{tag}.svg",
                     fit_ao.msd_sigma_fit, data_color="C0",
                 )
+                print(f"    anomalous_offset {pct}% OK")
             except (ValueError, RuntimeError) as e:
                 print(f"    anomalous_offset {pct}%: FAILED — {e}")
-
-            # ── Anomalous+drift fit (4D_α τ^α + v²τ²) ─────────
-            if vstats is not None:
-                try:
-                    Da, Da_err, a, a_err, v, v_err, _pcov, \
-                        tau_f, msd_f, msd_p, chi2, _rss, sig = \
-                        _fit_anomalous_drift_at_fraction(
-                            eamsd.tau, eamsd.msd,
-                            eamsd.n_max, eamsd.dt,
-                            1.0,  # data already capped
-                            1e-2, (1e-6, 1e2),
-                            1.0, (0.01, 2.0),
-                            vstats.v_initial, vstats.v_bounds,
-                            eamsd.msd_sem,
-                        )
-                    rows.append({
-                        **base_row,
-                        "model": "anomalous_drift",
-                        "D_alpha": Da, "D_alpha_error": Da_err,
-                        "alpha": a, "alpha_error": a_err,
-                        "chi2_red": chi2,
-                        "v": v, "v_error": v_err,
-                    })
-
-                    tag = f"f{pct:03d}"
-                    txt = "\n".join([
-                        r"$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$" % (Da, Da_err),
-                        r"$\alpha = %.4f \pm %.4f$" % (a, a_err),
-                        r"$v = (%.2e \pm %.1e)\ \mu m/s$" % (v, v_err),
-                        r"$\chi^2_\nu = %.4f$" % chi2,
-                    ])
-                    _save_fit_plot(
-                        tau_f, msd_f, msd_p, txt,
-                        r"Anomalous+drift: MSD = 4$D_\alpha\tau^\alpha$ + $v^2\tau^2$",
-                        NONLINEAR_DIR / f"{stem}_eamsd_anomalous_drift_{tag}.svg",
-                        sig, data_color="C0",
-                    )
-                except (ValueError, RuntimeError) as e:
-                    print(f"    anomalous_drift {pct}%: FAILED — {e}")
 
     df = pd.DataFrame(rows)
     print(f"\n[eaMSD] Total per-file fits: {len(df)}")
@@ -431,16 +310,12 @@ def extract_ensemble_tamsd_D(csv_files):
 
         global_dt = estimate_global_time_step(trajectories)
 
-        try:
-            vstats = analyze_velocities(trajectories, min_points=MIN_TRACK_POINTS)
-        except ValueError:
-            vstats = None
-
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
 
             tau, msd_mean, msd_sem, _ = compute_ensemble_tamsd(
                 trajectories, max_lag_fraction=frac, global_dt=global_dt,
+                drift_corrected=True,
             )
             if tau.size < 4:
                 continue
@@ -450,40 +325,6 @@ def extract_ensemble_tamsd_D(csv_files):
                 file=stem, n_tracks=len(trajectories),
                 fraction=frac, dt=global_dt,
             )
-
-            # ── Anomalous fit ──────────────────────────────────
-            try:
-                Da, Da_err, a, a_err, _pcov, tau_f, msd_f, msd_p, chi2, _rss, sig = \
-                    _fit_anomalous_at_fraction(
-                        tau, msd_mean, n_max, global_dt,
-                        1.0,
-                        1e-2, (1e-6, 1e2),
-                        1.0, (0.01, 2.0),
-                        msd_sem,
-                    )
-                rows.append({
-                    **base_row,
-                    "model": "anomalous",
-                    "D_alpha": Da, "D_alpha_error": Da_err,
-                    "alpha": a, "alpha_error": a_err,
-                    "chi2_red": chi2,
-                    "v": np.nan, "v_error": np.nan,
-                })
-
-                tag = f"f{pct:03d}"
-                txt = "\n".join([
-                    r"$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$" % (Da, Da_err),
-                    r"$\alpha = %.4f \pm %.4f$" % (a, a_err),
-                    r"$\chi^2_\nu = %.4f$" % chi2,
-                ])
-                _save_fit_plot(
-                    tau_f, msd_f, msd_p, txt,
-                    r"Anomalous: MSD = 4$D_\alpha\tau^\alpha$",
-                    LINEAR_DIR / f"{stem}_ens_tamsd_anomalous_{tag}.svg",
-                    sig, data_color="C2",
-                )
-            except (ValueError, RuntimeError) as e:
-                print(f"    anomalous {pct}%: FAILED — {e}")
 
             # ── Anomalous+offset fit ───────────────────────────
             try:
@@ -498,7 +339,6 @@ def extract_ensemble_tamsd_D(csv_files):
                     "D_alpha": fit_ao.D_alpha, "D_alpha_error": fit_ao.D_alpha_error,
                     "alpha": fit_ao.alpha, "alpha_error": fit_ao.alpha_error,
                     "chi2_red": fit_ao.chi_squared_red,
-                    "v": np.nan, "v_error": np.nan,
                     "offset": fit_ao.offset, "offset_error": fit_ao.offset_error,
                 })
 
@@ -512,51 +352,13 @@ def extract_ensemble_tamsd_D(csv_files):
                 _save_fit_plot(
                     fit_ao.tau_fit, fit_ao.msd_fit, fit_ao.msd_predicted,
                     "\n".join(txt_lines),
-                    r"Anomalous+offset: MSD = 4$D_\alpha\tau^\alpha$ + $c$",
+                    r"Drift-corr. anom.+offset: 4$D_\alpha\tau^\alpha$ + $c$",
                     LINEAR_OFFSET_DIR / f"{stem}_ens_tamsd_anomalous_offset_{tag}.svg",
                     fit_ao.msd_sigma_fit, data_color="C2",
                 )
+                print(f"    anomalous_offset {pct}% OK")
             except (ValueError, RuntimeError) as e:
                 print(f"    anomalous_offset {pct}%: FAILED — {e}")
-
-            # ── Anomalous+drift fit ────────────────────────────
-            if vstats is not None:
-                try:
-                    Da, Da_err, a, a_err, v, v_err, _pcov, \
-                        tau_f, msd_f, msd_p, chi2, _rss, sig = \
-                        _fit_anomalous_drift_at_fraction(
-                            tau, msd_mean,
-                            n_max, global_dt,
-                            1.0,
-                            1e-2, (1e-6, 1e2),
-                            1.0, (0.01, 2.0),
-                            vstats.v_initial, vstats.v_bounds,
-                            msd_sem,
-                        )
-                    rows.append({
-                        **base_row,
-                        "model": "anomalous_drift",
-                        "D_alpha": Da, "D_alpha_error": Da_err,
-                        "alpha": a, "alpha_error": a_err,
-                        "chi2_red": chi2,
-                        "v": v, "v_error": v_err,
-                    })
-
-                    tag = f"f{pct:03d}"
-                    txt = "\n".join([
-                        r"$D_\alpha = (%.2e \pm %.1e)\ \mu m^2/s^\alpha$" % (Da, Da_err),
-                        r"$\alpha = %.4f \pm %.4f$" % (a, a_err),
-                        r"$v = (%.2e \pm %.1e)\ \mu m/s$" % (v, v_err),
-                        r"$\chi^2_\nu = %.4f$" % chi2,
-                    ])
-                    _save_fit_plot(
-                        tau_f, msd_f, msd_p, txt,
-                        r"Anomalous+drift: MSD = 4$D_\alpha\tau^\alpha$ + $v^2\tau^2$",
-                        NONLINEAR_DIR / f"{stem}_ens_tamsd_anomalous_drift_{tag}.svg",
-                        sig, data_color="C2",
-                    )
-                except (ValueError, RuntimeError) as e:
-                    print(f"    anomalous_drift {pct}%: FAILED — {e}")
 
     df = pd.DataFrame(rows)
     print(f"\n[<taMSD>] Total per-file fits: {len(df)}")
@@ -623,129 +425,129 @@ def analyze_group(group_name, csv_files, group_suffix=""):
     # Phase D+E: histograms, statistics
     summary_rows = []
 
-    for model in ("anomalous", "anomalous_offset", "anomalous_drift"):
-        for frac in FIT_FRACTIONS:
-            pct = int(frac * 100)
-            tag = f"{model}_f{pct:03d}{sfx}"
+    model = "anomalous_offset"
+    for frac in FIT_FRACTIONS:
+        pct = int(frac * 100)
+        tag = f"{model}_f{pct:03d}{sfx}"
 
-            # ── taMSD distribution ─────────────────────────────
-            mask_ta = (df_tamsd["model"] == model) & (df_tamsd["fraction"] == frac)
-            Da_ta = df_tamsd.loc[mask_ta, "D_alpha"].values if not df_tamsd.empty else np.array([])
-            a_ta = df_tamsd.loc[mask_ta, "alpha"].values if not df_tamsd.empty else np.array([])
+        # ── taMSD distribution ─────────────────────────────
+        mask_ta = (df_tamsd["model"] == model) & (df_tamsd["fraction"] == frac)
+        Da_ta = df_tamsd.loc[mask_ta, "D_alpha"].values if not df_tamsd.empty else np.array([])
+        a_ta = df_tamsd.loc[mask_ta, "alpha"].values if not df_tamsd.empty else np.array([])
 
-            st_Da_ta = compute_statistics(Da_ta)
-            st_a_ta = compute_statistics(a_ta)
-            t_stat_a, p_val_a = one_sample_ttest(a_ta, 1.0)  # H0: α = 1 (normal diffusion)
+        st_Da_ta = compute_statistics(Da_ta)
+        st_a_ta = compute_statistics(a_ta)
+        t_stat_a, p_val_a = one_sample_ttest(a_ta, 1.0)  # H0: α = 1 (normal diffusion)
 
-            print(f"\n{'-'*60}")
-            print(f"taMSD | {model} | {pct}% lag fraction | {group_name}")
-            print(f"  N tracks      = {st_Da_ta['n']}")
-            print(f"  Mean(D_α)     = {st_Da_ta['mean']:.4e} µm²/s^α")
-            print(f"  Median(D_α)   = {st_Da_ta['median']:.4e}")
-            print(f"  Mean(α)       = {st_a_ta['mean']:.4f}")
-            print(f"  Median(α)     = {st_a_ta['median']:.4f}")
-            print(f"  t-test α vs 1: t = {t_stat_a:.3f}, p = {p_val_a:.4e}")
+        print(f"\n{'-'*60}")
+        print(f"taMSD | {model} | {pct}% lag fraction | {group_name}")
+        print(f"  N tracks      = {st_Da_ta['n']}")
+        print(f"  Mean(D_α)     = {st_Da_ta['mean']:.4e} µm²/s^α")
+        print(f"  Median(D_α)   = {st_Da_ta['median']:.4e}")
+        print(f"  Mean(α)       = {st_a_ta['mean']:.4f}")
+        print(f"  Median(α)     = {st_a_ta['median']:.4f}")
+        print(f"  t-test α vs 1: t = {t_stat_a:.3f}, p = {p_val_a:.4e}")
 
-            if st_Da_ta["n"] > 0:
-                Da_fin = Da_ta[np.isfinite(Da_ta)]
-                _plot_histogram(
-                    Da_fin,
-                    xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
-                    output_path=STATS_DIR / f"tamsd_Dalpha_histogram_{tag}.svg",
-                    mean_val=st_Da_ta["mean"], median_val=st_Da_ta["median"],
-                )
-                a_fin = a_ta[np.isfinite(a_ta)]
-                _plot_histogram(
-                    a_fin,
-                    xlabel=r"$\alpha$",
-                    output_path=STATS_DIR / f"tamsd_alpha_histogram_{tag}.svg",
-                    mean_val=st_a_ta["mean"], median_val=st_a_ta["median"],
-                    ref_line=1.0,
-                    ref_label=r"$\alpha = 1$ (normal)",
-                )
+        if st_Da_ta["n"] > 0:
+            Da_fin = Da_ta[np.isfinite(Da_ta)]
+            _plot_histogram(
+                Da_fin,
+                xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
+                output_path=STATS_DIR / f"tamsd_Dalpha_histogram_{tag}.svg",
+                mean_val=st_Da_ta["mean"], median_val=st_Da_ta["median"],
+            )
+            a_fin = a_ta[np.isfinite(a_ta)]
+            _plot_histogram(
+                a_fin,
+                xlabel=r"$\alpha$",
+                output_path=STATS_DIR / f"tamsd_alpha_histogram_{tag}.svg",
+                mean_val=st_a_ta["mean"], median_val=st_a_ta["median"],
+                ref_line=1.0,
+                ref_label=r"$\alpha = 1$ (normal)",
+            )
 
-            # ── eaMSD distribution ─────────────────────────────
-            mask_ea = (df_eamsd["model"] == model) & (df_eamsd["fraction"] == frac)
-            Da_ea = df_eamsd.loc[mask_ea, "D_alpha"].values if not df_eamsd.empty else np.array([])
-            a_ea = df_eamsd.loc[mask_ea, "alpha"].values if not df_eamsd.empty else np.array([])
+        # ── eaMSD distribution ─────────────────────────────
+        mask_ea = (df_eamsd["model"] == model) & (df_eamsd["fraction"] == frac)
+        Da_ea = df_eamsd.loc[mask_ea, "D_alpha"].values if not df_eamsd.empty else np.array([])
+        a_ea = df_eamsd.loc[mask_ea, "alpha"].values if not df_eamsd.empty else np.array([])
 
-            st_Da_ea = compute_statistics(Da_ea)
-            st_a_ea = compute_statistics(a_ea)
-            t_stat_a_ea, p_val_a_ea = one_sample_ttest(a_ea, 1.0)
+        st_Da_ea = compute_statistics(Da_ea)
+        st_a_ea = compute_statistics(a_ea)
+        t_stat_a_ea, p_val_a_ea = one_sample_ttest(a_ea, 1.0)
 
-            print(f"\neaMSD | {model} | {pct}% | {group_name}")
-            print(f"  N files       = {st_Da_ea['n']}")
-            print(f"  Mean(D_α)     = {st_Da_ea['mean']:.4e}")
-            print(f"  Mean(α)       = {st_a_ea['mean']:.4f}")
+        print(f"\neaMSD | {model} | {pct}% | {group_name}")
+        print(f"  N files       = {st_Da_ea['n']}")
+        print(f"  Mean(D_α)     = {st_Da_ea['mean']:.4e}")
+        print(f"  Mean(α)       = {st_a_ea['mean']:.4f}")
 
-            if st_Da_ea["n"] > 0:
-                _plot_histogram(
-                    Da_ea[np.isfinite(Da_ea)],
-                    xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
-                    output_path=STATS_DIR / f"eamsd_Dalpha_histogram_{tag}.svg",
-                    mean_val=st_Da_ea["mean"], median_val=st_Da_ea["median"],
-                )
-                _plot_histogram(
-                    a_ea[np.isfinite(a_ea)],
-                    xlabel=r"$\alpha$",
-                    output_path=STATS_DIR / f"eamsd_alpha_histogram_{tag}.svg",
-                    mean_val=st_a_ea["mean"], median_val=st_a_ea["median"],
-                    ref_line=1.0,
-                    ref_label=r"$\alpha = 1$ (normal)",
-                )
+        if st_Da_ea["n"] > 0:
+            _plot_histogram(
+                Da_ea[np.isfinite(Da_ea)],
+                xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
+                output_path=STATS_DIR / f"eamsd_Dalpha_histogram_{tag}.svg",
+                mean_val=st_Da_ea["mean"], median_val=st_Da_ea["median"],
+            )
+            _plot_histogram(
+                a_ea[np.isfinite(a_ea)],
+                xlabel=r"$\alpha$",
+                output_path=STATS_DIR / f"eamsd_alpha_histogram_{tag}.svg",
+                mean_val=st_a_ea["mean"], median_val=st_a_ea["median"],
+                ref_line=1.0,
+                ref_label=r"$\alpha = 1$ (normal)",
+            )
 
-            # ── ⟨taMSD⟩ distribution ───────────────────────────
-            mask_et = (df_ens_tamsd["model"] == model) & (df_ens_tamsd["fraction"] == frac)
-            Da_et = df_ens_tamsd.loc[mask_et, "D_alpha"].values if not df_ens_tamsd.empty else np.array([])
-            a_et = df_ens_tamsd.loc[mask_et, "alpha"].values if not df_ens_tamsd.empty else np.array([])
+        # ── ⟨taMSD⟩ distribution ───────────────────────────
+        mask_et = (df_ens_tamsd["model"] == model) & (df_ens_tamsd["fraction"] == frac)
+        Da_et = df_ens_tamsd.loc[mask_et, "D_alpha"].values if not df_ens_tamsd.empty else np.array([])
+        a_et = df_ens_tamsd.loc[mask_et, "alpha"].values if not df_ens_tamsd.empty else np.array([])
 
-            st_Da_et = compute_statistics(Da_et)
-            st_a_et = compute_statistics(a_et)
-            t_stat_a_et, p_val_a_et = one_sample_ttest(a_et, 1.0)
+        st_Da_et = compute_statistics(Da_et)
+        st_a_et = compute_statistics(a_et)
+        t_stat_a_et, p_val_a_et = one_sample_ttest(a_et, 1.0)
 
-            print(f"\n<taMSD> | {model} | {pct}% | {group_name}")
-            print(f"  N files       = {st_Da_et['n']}")
-            print(f"  Mean(D_α)     = {st_Da_et['mean']:.4e}")
-            print(f"  Mean(α)       = {st_a_et['mean']:.4f}")
+        print(f"\n<taMSD> | {model} | {pct}% | {group_name}")
+        print(f"  N files       = {st_Da_et['n']}")
+        print(f"  Mean(D_α)     = {st_Da_et['mean']:.4e}")
+        print(f"  Mean(α)       = {st_a_et['mean']:.4f}")
 
-            if st_Da_et["n"] > 0:
-                _plot_histogram(
-                    Da_et[np.isfinite(Da_et)],
-                    xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
-                    output_path=STATS_DIR / f"ens_tamsd_Dalpha_histogram_{tag}.svg",
-                    mean_val=st_Da_et["mean"], median_val=st_Da_et["median"],
-                )
-                _plot_histogram(
-                    a_et[np.isfinite(a_et)],
-                    xlabel=r"$\alpha$",
-                    output_path=STATS_DIR / f"ens_tamsd_alpha_histogram_{tag}.svg",
-                    mean_val=st_a_et["mean"], median_val=st_a_et["median"],
-                    ref_line=1.0,
-                    ref_label=r"$\alpha = 1$ (normal)",
-                )
+        if st_Da_et["n"] > 0:
+            _plot_histogram(
+                Da_et[np.isfinite(Da_et)],
+                xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
+                output_path=STATS_DIR / f"ens_tamsd_Dalpha_histogram_{tag}.svg",
+                mean_val=st_Da_et["mean"], median_val=st_Da_et["median"],
+            )
+            _plot_histogram(
+                a_et[np.isfinite(a_et)],
+                xlabel=r"$\alpha$",
+                output_path=STATS_DIR / f"ens_tamsd_alpha_histogram_{tag}.svg",
+                mean_val=st_a_et["mean"], median_val=st_a_et["median"],
+                ref_line=1.0,
+                ref_label=r"$\alpha = 1$ (normal)",
+            )
 
-            summary_rows.append(dict(
-                group=group_name,
-                model=model, fraction=frac,
-                # taMSD per-track
-                Da_tamsd_mean=st_Da_ta["mean"], Da_tamsd_std=st_Da_ta["std"],
-                Da_tamsd_sem=st_Da_ta["sem"],
-                alpha_tamsd_mean=st_a_ta["mean"], alpha_tamsd_std=st_a_ta["std"],
-                N_tracks=st_Da_ta["n"],
-                t_stat_alpha_tamsd=t_stat_a, p_val_alpha_tamsd=p_val_a,
-                # eaMSD per-file
-                Da_eamsd_mean=st_Da_ea["mean"], Da_eamsd_std=st_Da_ea["std"],
-                Da_eamsd_sem=st_Da_ea["sem"],
-                alpha_eamsd_mean=st_a_ea["mean"], alpha_eamsd_std=st_a_ea["std"],
-                N_files_ea=st_Da_ea["n"],
-                t_stat_alpha_eamsd=t_stat_a_ea, p_val_alpha_eamsd=p_val_a_ea,
-                # ⟨taMSD⟩ per-file
-                Da_ens_tamsd_mean=st_Da_et["mean"], Da_ens_tamsd_std=st_Da_et["std"],
-                Da_ens_tamsd_sem=st_Da_et["sem"],
-                alpha_ens_tamsd_mean=st_a_et["mean"], alpha_ens_tamsd_std=st_a_et["std"],
-                N_files_et=st_Da_et["n"],
-                t_stat_alpha_ens_tamsd=t_stat_a_et, p_val_alpha_ens_tamsd=p_val_a_et,
-            ))
+        summary_rows.append(dict(
+            group=group_name,
+            model=model, fraction=frac,
+            # taMSD per-track
+            Da_tamsd_mean=st_Da_ta["mean"], Da_tamsd_std=st_Da_ta["std"],
+            Da_tamsd_sem=st_Da_ta["sem"],
+            alpha_tamsd_mean=st_a_ta["mean"], alpha_tamsd_std=st_a_ta["std"],
+            N_tracks=st_Da_ta["n"],
+            t_stat_alpha_tamsd=t_stat_a, p_val_alpha_tamsd=p_val_a,
+            # eaMSD per-file
+            Da_eamsd_mean=st_Da_ea["mean"], Da_eamsd_std=st_Da_ea["std"],
+            Da_eamsd_sem=st_Da_ea["sem"],
+            alpha_eamsd_mean=st_a_ea["mean"], alpha_eamsd_std=st_a_ea["std"],
+            N_files_ea=st_Da_ea["n"],
+            t_stat_alpha_eamsd=t_stat_a_ea, p_val_alpha_eamsd=p_val_a_ea,
+            # ⟨taMSD⟩ per-file
+            Da_ens_tamsd_mean=st_Da_et["mean"], Da_ens_tamsd_std=st_Da_et["std"],
+            Da_ens_tamsd_sem=st_Da_et["sem"],
+            alpha_ens_tamsd_mean=st_a_et["mean"], alpha_ens_tamsd_std=st_a_et["std"],
+            N_files_et=st_Da_et["n"],
+            t_stat_alpha_ens_tamsd=t_stat_a_et, p_val_alpha_ens_tamsd=p_val_a_et,
+        ))
 
     # Save per-group CSVs
     if not df_tamsd.empty:
@@ -784,7 +586,7 @@ def main():
     args = parse_args()
 
     # Create output dirs
-    for d in (STATS_DIR, LINEAR_DIR, LINEAR_OFFSET_DIR, NONLINEAR_DIR, DOC_DIR):
+    for d in (STATS_DIR, LINEAR_OFFSET_DIR, DOC_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     groups = group_csv_files(DATA_DIR)
@@ -805,12 +607,44 @@ def main():
         df_summary.to_csv(csv_out, index=False, float_format="%.6e")
         print(f"\nSummary CSV saved to {csv_out}")
 
+    # ── D_α / D_SE comparison ──────────────────────────────────
+    print(f"\n{'='*100}")
+    print("D_α / D_SE  COMPARISON  (D_SE = Stokes-Einstein upper bound, glycerol/water only)")
+    print(f"{'='*100}")
+    dse_rows = []
+    for r in all_summary:
+        grp = r["group"]
+        d_se = D_SE.get(grp, np.nan)
+        for est, key_Da, key_alpha in [
+            ("taMSD", "Da_tamsd_mean", "alpha_tamsd_mean"),
+            ("eaMSD", "Da_eamsd_mean", "alpha_eamsd_mean"),
+            ("⟨taMSD⟩", "Da_ens_tamsd_mean", "alpha_ens_tamsd_mean"),
+        ]:
+            Da = r[key_Da]
+            alpha = r[key_alpha]
+            ratio = Da / d_se if np.isfinite(Da) and d_se > 0 else np.nan
+            dse_rows.append(dict(
+                group=grp, estimator=est,
+                fraction=r["fraction"],
+                D_alpha=Da, alpha=alpha,
+                D_SE=d_se, ratio_D_alpha_over_D_SE=ratio,
+            ))
+            print(f"  {grp:<8} {est:<8} f={int(r['fraction']*100):>3}%  "
+                  f"D_α = {Da:.4e}  α = {alpha:.4f}  D_SE = {d_se:.4e}  "
+                  f"D_α/D_SE = {ratio:.4f}")
+
+    if dse_rows:
+        df_dse = pd.DataFrame(dse_rows)
+        dse_csv = DOC_DIR / "diffusion_drift_corrected_vs_DSE.csv"
+        df_dse.to_csv(dse_csv, index=False, float_format="%.6e")
+        print(f"\nD_α / D_SE CSV saved to {dse_csv}")
+
     # ── Final summary table ─────────────────────────────────────
     print(f"\n{'='*140}")
-    print("FINAL SUMMARY — ANOMALOUS DIFFUSION")
+    print("FINAL SUMMARY — DRIFT-CORRECTED ANOMALOUS DIFFUSION (anomalous_offset)")
     print(f"{'='*140}")
 
-    header = (f"{'Group':<8} {'Model':<18} {'Frac':>5} | "
+    header = (f"{'Group':<8} {'Frac':>5} | "
               f"{'<D_α>_ta':>11} {'<α>_ta':>8} {'N':>5} {'p(α=1)':>10} | "
               f"{'<D_α>_ea':>11} {'<α>_ea':>8} {'N':>5} {'p(α=1)':>10} | "
               f"{'<D_α>_⟨ta⟩':>11} {'<α>_⟨ta⟩':>8} {'N':>5} {'p(α=1)':>10}")
@@ -819,7 +653,7 @@ def main():
     for r in all_summary:
         pct = f"{int(r['fraction']*100)}%"
         print(
-            f"{r['group']:<8} {r['model']:<18} {pct:>5} | "
+            f"{r['group']:<8} {pct:>5} | "
             f"{r['Da_tamsd_mean']:>11.4e} {r['alpha_tamsd_mean']:>8.4f} "
             f"{r['N_tracks']:>5} {r['p_val_alpha_tamsd']:>10.4e} | "
             f"{r['Da_eamsd_mean']:>11.4e} {r['alpha_eamsd_mean']:>8.4f} "

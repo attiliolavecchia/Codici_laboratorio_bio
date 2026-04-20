@@ -69,7 +69,7 @@ def diffusion_coefficient(T_C, c_m, r):
 if __name__ == "__main__":
     # --- Experimental parameters ---
     T_C = 23.3       # Temperature [°C]
-    c_m = 0.85       # Glycerol mass fraction
+    c_m = 0.59      # Glycerol mass fraction
     r = 120e-9       # Particle radius [m]
     k_B = 1.38e-23   # Boltzmann constant [J/K]
     T_K = T_C + 273.15
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     print(f"Particle radius:      r = {r*1e9:.0f} nm")
     print(f"k_B:                  {k_B} J/K")
     print()
-    print(f"eta_mix (85%, 23.3°C) = {eta:.6e} Pa·s    ({eta*1e3:.2f} mPa·s)")
+    print(f"eta_mix ({c_m*100:.0f}%, {T_C}°C) = {eta:.6e} Pa·s    ({eta*1e3:.2f} mPa·s)")
     print()
     print(f"D = k_B T / (6 pi eta r)")
     print(f"  = {D:.6e} m²/s")
