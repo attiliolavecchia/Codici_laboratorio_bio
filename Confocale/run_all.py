@@ -25,10 +25,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from check_ergodicity import compute_ensemble_tamsd
 from data_reader import read_trajectories_from_csv
 from msd_analyzer import (
     calculate_ensemble_msd,
-    calculate_time_averaged_msd_per_track,
     compute_ensemble_drift,
 )
 from msd_fitting import (
@@ -107,15 +107,7 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
     # Use drift correction for anomalous datasets
     use_drift_corr = (label == "anomalous")
 
-    # Pre-compute the ensemble (common-mode) drift once per file
-    ens_drift = (
-        compute_ensemble_drift(trajectories, min_tracks_per_step=5)
-        if use_drift_corr else None
-    )
-
-    # Select the longest track for TA-MSD
-    longest_id = max(trajectories.keys(), key=lambda k: trajectories[k].n_points)
-    track = trajectories[longest_id]
+    global_dt = None  # inferred lazily by compute_ensemble_tamsd
 
     for frac in LAG_FRACTIONS:
         pct = int(frac * 100)
@@ -135,16 +127,16 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
         except Exception as e:
             print(f"    eamsd {pct:3d}% FAILED: {e}")
 
-        # TA-MSD
+        # TA-MSD — ensemble average over all tracks (SEM = std / sqrt(N_tracks))
         try:
-            ta = calculate_time_averaged_msd_per_track(
-                track, max_lag_fraction=frac, drift_corrected=use_drift_corr,
-                ensemble_drift=ens_drift,
+            tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
+                trajectories, max_lag_fraction=frac,
+                drift_corrected=use_drift_corr,
             )
-            if ta.tau.size > 0:
+            if tau_ta.size > 0:
                 out = tamsd_dir / f"{stem}_tamsd_{tag}.svg"
-                plot_and_save(ta.tau, ta.msd, out, msd_sem=ta.msd_sem,
-                              label="TA-MSD", color="C1")
+                plot_and_save(tau_ta, msd_ta, out, msd_sem=sem_ta,
+                              label="⟨TA-MSD⟩", color="C1")
                 print(f"    tamsd {pct:3d}% OK")
         except Exception as e:
             print(f"    tamsd {pct:3d}% FAILED: {e}")

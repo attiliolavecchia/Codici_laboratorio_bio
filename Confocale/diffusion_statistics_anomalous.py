@@ -72,6 +72,12 @@ DOC_DIR = SCRIPT_DIR / "Docu"
 MIN_TRACK_POINTS = 30
 FIT_FRACTIONS = [0.10, 0.25]
 
+# Visualization-only cleanup targets (keeps raw results and CSV untouched).
+VISUAL_OUTLIER_FILTER_TAGS = {
+    "anomalous_offset_f010_glic200",
+    "anomalous_offset_f025_glic200",
+}
+
 # Subdirectory names for grouping
 GLIC50_SUBDIR = "PEG_15_Glicerolo_50_H2O_35"
 GLIC200_SUBDIR = "PEG_18_Glicerolo_40_H2O_42"
@@ -185,6 +191,7 @@ def extract_per_track_D(csv_files):
         )
         print(f"  Ensemble drift: min M per step = {ens_drift.min_M}, "
               f"K_grid = {ens_drift.time.size}")
+        print("  taMSD drift correction: ENABLED (ensemble drift subtraction)")
 
         eligible = {tid: t for tid, t in trajectories.items()
                     if t.n_points >= MIN_TRACK_POINTS}
@@ -396,6 +403,57 @@ def compute_statistics(values):
     )
 
 
+def remove_upper_outliers_for_plot(values, whisker=3.0):
+    """Remove extreme upper-tail values for clearer D_alpha histograms.
+
+    Applies a one-sided IQR rule on log10(values): keep log10(v) <= Q3 + k*IQR.
+    Returns (filtered_values, n_removed, upper_threshold).
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 8:
+        return arr, 0, float("nan")
+
+    pos = arr[arr > 0.0]
+    if pos.size < 8:
+        return arr, 0, float("nan")
+
+    logv = np.log10(pos)
+    q1, q3 = np.quantile(logv, [0.25, 0.75])
+    iqr = q3 - q1
+    if not np.isfinite(iqr) or iqr <= 0:
+        return arr, 0, float("nan")
+
+    upper_log = q3 + whisker * iqr
+    upper_thr = 10.0 ** upper_log
+    keep_mask = arr <= upper_thr
+    filtered = arr[keep_mask]
+    n_removed = int(arr.size - filtered.size)
+    return filtered, n_removed, float(upper_thr)
+
+
+def validate_track_fit_uniqueness(df_tamsd, group_name):
+    """Ensure one fit row per (file, track_id, model, fraction)."""
+    if df_tamsd.empty:
+        print(f"  [Check] {group_name}: no per-track rows to validate.")
+        return
+
+    key_cols = ["file", "track_id", "model", "fraction"]
+    dup_mask = df_tamsd.duplicated(key_cols, keep=False)
+    n_dup = int(dup_mask.sum())
+    if n_dup > 0:
+        ex = df_tamsd.loc[dup_mask, key_cols].head(5).to_dict(orient="records")
+        raise RuntimeError(
+            "Duplicate per-track fit rows detected (same file/track/model/fraction). "
+            f"Examples: {ex}"
+        )
+
+    print(
+        f"  [Check] {group_name}: uniqueness OK — "
+        f"{len(df_tamsd)} rows, duplicates on {key_cols} = 0"
+    )
+
+
 def one_sample_ttest(values, reference):
     """One-sample t-test: H0: mean(values) = reference.
 
@@ -428,6 +486,7 @@ def analyze_group(group_name, csv_files, group_suffix=""):
 
     # Phase B: per-track taMSD
     df_tamsd = extract_per_track_D(csv_files)
+    validate_track_fit_uniqueness(df_tamsd, group_name)
 
     # Phase C: per-file eaMSD
     df_eamsd = extract_per_file_D(csv_files)
@@ -463,11 +522,29 @@ def analyze_group(group_name, csv_files, group_suffix=""):
 
         if st_Da_ta["n"] > 0:
             Da_fin = Da_ta[np.isfinite(Da_ta)]
+            Da_plot = Da_fin
+            Da_plot_mean = st_Da_ta["mean"]
+            Da_plot_median = st_Da_ta["median"]
+
+            if tag in VISUAL_OUTLIER_FILTER_TAGS:
+                Da_plot, n_removed, upper_thr = remove_upper_outliers_for_plot(Da_fin)
+                if Da_plot.size > 0 and n_removed > 0:
+                    st_Da_plot = compute_statistics(Da_plot)
+                    Da_plot_mean = st_Da_plot["mean"]
+                    Da_plot_median = st_Da_plot["median"]
+                    print(
+                        "  [Plot cleanup] "
+                        f"{tag}: removed {n_removed} upper-tail outlier(s) "
+                        f"above {upper_thr:.3e} for visualization."
+                    )
+                else:
+                    Da_plot = Da_fin
+
             _plot_histogram(
-                Da_fin,
+                Da_plot,
                 xlabel=r"$D_\alpha$ [$\mu$m$^2$/s$^\alpha$]",
                 output_path=STATS_DIR / f"tamsd_Dalpha_histogram_{tag}.svg",
-                mean_val=st_Da_ta["mean"], median_val=st_Da_ta["median"],
+                mean_val=Da_plot_mean, median_val=Da_plot_median,
             )
             a_fin = a_ta[np.isfinite(a_ta)]
             _plot_histogram(
