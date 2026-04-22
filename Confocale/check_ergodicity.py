@@ -40,6 +40,7 @@ from data_reader import read_trajectories_from_csv
 from msd_analyzer import (
     calculate_ensemble_msd,
     calculate_time_averaged_msd_per_track,
+    compute_ensemble_drift,
     average_across_trajectories,
     build_tau_array,
     determine_maximum_lag_steps,
@@ -85,11 +86,20 @@ def compute_ensemble_tamsd(trajectories, max_lag_fraction=None, global_dt=None,
 
     tau = build_tau_array(K, global_dt)
 
+    # Compute the common-mode (ensemble) drift once for this file, so each
+    # per-track TAMSD subtracts the SAME drift instead of doing per-track OLS
+    # (which biases the TAMSD by ~τ/T; Qian-Sheetz-Elson 1991, Vestergaard 2014).
+    ens_drift = None
+    if drift_corrected:
+        ens_drift = compute_ensemble_drift(
+            trajectories, global_dt=global_dt, min_tracks_per_step=5,
+        )
+
     per_track_tamsd = []
     for track in trajectories.values():
         res = calculate_time_averaged_msd_per_track(
             track, max_lag_fraction=max_lag_fraction, dt_override=global_dt,
-            drift_corrected=drift_corrected,
+            drift_corrected=drift_corrected, ensemble_drift=ens_drift,
         )
         # Pad / trim to K entries
         arr = np.full(K, np.nan, dtype=float)

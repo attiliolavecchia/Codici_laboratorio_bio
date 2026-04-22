@@ -26,7 +26,11 @@ import numpy as np
 import pandas as pd
 
 from data_reader import read_trajectories_from_csv
-from msd_analyzer import calculate_ensemble_msd, calculate_time_averaged_msd_per_track
+from msd_analyzer import (
+    calculate_ensemble_msd,
+    calculate_time_averaged_msd_per_track,
+    compute_ensemble_drift,
+)
 from msd_fitting import (
     fit_msd_linear, linear_msd_model,
     fit_msd_nonlinear, nonlinear_msd_model, analyze_velocities,
@@ -103,6 +107,12 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
     # Use drift correction for anomalous datasets
     use_drift_corr = (label == "anomalous")
 
+    # Pre-compute the ensemble (common-mode) drift once per file
+    ens_drift = (
+        compute_ensemble_drift(trajectories, min_tracks_per_step=5)
+        if use_drift_corr else None
+    )
+
     # Select the longest track for TA-MSD
     longest_id = max(trajectories.keys(), key=lambda k: trajectories[k].n_points)
     track = trajectories[longest_id]
@@ -129,6 +139,7 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
         try:
             ta = calculate_time_averaged_msd_per_track(
                 track, max_lag_fraction=frac, drift_corrected=use_drift_corr,
+                ensemble_drift=ens_drift,
             )
             if ta.tau.size > 0:
                 out = tamsd_dir / f"{stem}_tamsd_{tag}.svg"

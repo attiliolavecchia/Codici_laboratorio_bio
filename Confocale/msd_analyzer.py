@@ -250,12 +250,139 @@ def calculate_ensemble_msd(
 
 
 
+@dataclass(frozen=True)
+class EnsembleDrift:
+    """Common-mode drift trajectory R(t_k) estimated from an ensemble.
+
+    Attributes:
+        time: 1D array of time points (seconds), aligned to a global frame grid.
+        Rx, Ry: cumulative ensemble drift positions at each time.
+        M_per_step: number of tracks contributing to each single-step displacement.
+        min_M: minimum M observed across all retained steps.
+    """
+    time: np.ndarray
+    Rx: np.ndarray
+    Ry: np.ndarray
+    M_per_step: np.ndarray
+    min_M: int
+
+
+def compute_ensemble_drift(
+    trajectories: Mapping[Union[int, str], Trajectory],
+    *,
+    global_dt: Optional[float] = None,
+    min_tracks_per_step: int = 5,
+) -> EnsembleDrift:
+    """Estimate the common-mode drift trajectory from an ensemble of tracks.
+
+    Algorithm (Crocker & Grier 1996, J. Colloid Interface Sci. 179:298, §III-D):
+        1) Build a global frame grid t_k = k·Δt covering the union of all tracks.
+        2) For each consecutive frame pair (k, k+1), compute the average single-step
+           displacement ⟨Δr⟩(t_k) over all tracks present at BOTH frames k and k+1.
+        3) The ensemble-drift position is the cumulative sum:
+                R(t_k) = Σ_{j<k} ⟨Δr⟩(t_j).
+        4) Steps with fewer than ``min_tracks_per_step`` contributing tracks are
+           reported via ``min_M`` so callers can warn the user.
+
+    Why this estimator (and not per-track OLS):
+        For pure Brownian motion with no drift, the OLS slope of x(t) on a single
+        track has variance Var(v̂) ≈ 2D/T (Qian, Sheetz, Elson 1991, Biophys. J.
+        60:910), so subtracting it removes part of the genuine diffusion signal
+        and biases the TAMSD as ⟨TAMSD_corr⟩ ≈ 4Dτ·(1 − τ/T·h(τ/T)). Averaging
+        single-step displacements across M tracks suppresses the diffusive
+        contribution by 1/√M while preserving the common drift, so the TAMSD
+        bias drops to O(τ/(M·T)) (Vestergaard, Blainey, Flyvbjerg 2014, PRE
+        89:022726; Manzo & Garcia-Parajo 2015, Rep. Prog. Phys. 78:124601).
+
+    Args:
+        trajectories: Mapping of Track ID to Trajectory. All tracks are assumed
+            to share a common Δt (validated against ``global_dt``).
+        global_dt: Optional override for Δt (seconds). If None, a robust estimate
+            is computed via ``estimate_global_time_step``.
+        min_tracks_per_step: Minimum number of tracks that must contribute to a
+            given single-step displacement for it to be considered reliable.
+            Steps below this threshold are kept (the cumulative sum still includes
+            them) but reported via ``min_M`` so callers can decide how to act.
+
+    Returns:
+        EnsembleDrift with cumulative R(t_k) for k = 0..K_max−1 (R(t_0) = 0).
+    """
+    if not trajectories:
+        return EnsembleDrift(
+            np.asarray([], float), np.asarray([], float), np.asarray([], float),
+            np.asarray([], int), 0,
+        )
+
+    if global_dt is None:
+        global_dt = estimate_global_time_step(trajectories)
+
+    # Build global frame index for each sample of each track
+    # frame_k = round((t - t_min_global) / Δt)
+    t_min = min(float(np.min(tr.time)) for tr in trajectories.values())
+    t_max = max(float(np.max(tr.time)) for tr in trajectories.values())
+    K_total = int(round((t_max - t_min) / global_dt)) + 1   # number of frames
+
+    # Per-step accumulators: sum of Δx, Δy, and count of contributing tracks
+    sum_dx = np.zeros(K_total - 1, dtype=float)
+    sum_dy = np.zeros(K_total - 1, dtype=float)
+    cnt    = np.zeros(K_total - 1, dtype=int)
+
+    for tr in trajectories.values():
+        t = np.asarray(tr.time, dtype=float)
+        x = np.asarray(tr.x, dtype=float)
+        y = np.asarray(tr.y, dtype=float)
+        if t.size < 2:
+            continue
+        # Frame indices (0-based, on the global grid)
+        frames = np.rint((t - t_min) / global_dt).astype(int)
+        # Single-step displacements only between *consecutive* frames
+        df = np.diff(frames)            # frame gaps
+        consecutive = (df == 1)
+        if not consecutive.any():
+            continue
+        dx = np.diff(x)[consecutive]
+        dy = np.diff(y)[consecutive]
+        idx = frames[:-1][consecutive]  # the starting frame of each step
+        # Accumulate (vectorized)
+        np.add.at(sum_dx, idx, dx)
+        np.add.at(sum_dy, idx, dy)
+        np.add.at(cnt,    idx, 1)
+
+    # Average single-step displacement at each step (NaN where no track contributed)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mean_dx = np.where(cnt > 0, sum_dx / np.maximum(cnt, 1), 0.0)
+        mean_dy = np.where(cnt > 0, sum_dy / np.maximum(cnt, 1), 0.0)
+    # Cumulative drift trajectory; R(t_0) = 0 by construction
+    Rx = np.concatenate([[0.0], np.cumsum(mean_dx)])
+    Ry = np.concatenate([[0.0], np.cumsum(mean_dy)])
+    time_grid = t_min + np.arange(K_total) * global_dt
+
+    # Report the worst-step coverage among steps that had at least one track
+    populated = cnt[cnt > 0]
+    min_M = int(populated.min()) if populated.size else 0
+    if populated.size and min_M < min_tracks_per_step:
+        n_thin = int(np.sum(cnt < min_tracks_per_step))
+        # warn but do not fail — the caller can decide
+        import warnings as _w
+        _w.warn(
+            f"compute_ensemble_drift: {n_thin}/{cnt.size} steps have "
+            f"M < {min_tracks_per_step} tracks (min M = {min_M}). "
+            "Drift estimate may be noisy at those lags.",
+            RuntimeWarning, stacklevel=2,
+        )
+
+    return EnsembleDrift(
+        time=time_grid, Rx=Rx, Ry=Ry, M_per_step=cnt, min_M=min_M,
+    )
+
+
 def calculate_time_averaged_msd_per_track(
     track: Trajectory,
     *,
     max_lag_fraction: Optional[float] = None,
     dt_override: Optional[float] = None,
     drift_corrected: bool = True,
+    ensemble_drift: Optional[EnsembleDrift] = None,
 ) -> MSDResult:
     """Compute the time-averaged MSD (TAMSD) for a single trajectory.
 
@@ -267,8 +394,18 @@ def calculate_time_averaged_msd_per_track(
     available points. The result is returned in the same ``MSDResult`` container
     used elsewhere for convenient plotting alongside ensemble MSD.
 
-    When ``drift_corrected=True``, a linear drift is estimated via least-squares
-    regression on (t, x) and (t, y) and subtracted before computing TAMSD.
+    Drift correction (when ``drift_corrected=True``):
+        The common-mode drift R(t_k) computed from the full ensemble (see
+        ``compute_ensemble_drift``) is subtracted from this track's coordinates:
+        x_corr(t_k) = x(t_k) − R_x(t_k), y analogously. This preserves the
+        track's individual diffusive fluctuations because R is built from a
+        Σ Δr / M average over all tracks (Crocker & Grier 1996, J. Colloid
+        Interface Sci. 179:298; Vestergaard et al. 2014, PRE 89:022726).
+
+        Per-track OLS detrending is intentionally NOT supported here: it biases
+        the TAMSD downward as ⟨TAMSD_corr⟩ ≈ 4Dτ·(1 − τ/T·h(τ/T)) because the
+        OLS slope on a single Brownian track has variance 2D/T and absorbs part
+        of the genuine diffusion (Qian, Sheetz, Elson 1991, Biophys. J. 60:910).
 
     Args:
         track: The single trajectory to analyze.
@@ -277,19 +414,18 @@ def calculate_time_averaged_msd_per_track(
         dt_override: If provided, this Δt (seconds) is used to convert steps to seconds.
             Otherwise we use ``track.dt`` if finite and positive; if that is
             not available, we fall back to 1.0 seconds.
-        drift_corrected: If True, subtract a linear drift (estimated by regression)
-            from the trajectory before computing TAMSD.
+        drift_corrected: If True, subtract the ensemble drift before computing TAMSD.
+            Requires ``ensemble_drift`` to be provided.
+        ensemble_drift: Pre-computed common-mode drift for the file the track
+            belongs to (see ``compute_ensemble_drift``). Required when
+            ``drift_corrected=True``.
 
     Returns:
-        MSDResult with fields populated for this single-trajectory TAMSD:
-            - tau: (K,) array, τ = 1..K multiplied by Δt (seconds)
-            - msd: (K,) TAMSD per lag in squared position units
-            - tracks_per_lag: array of ones of length K (one contributing track)
-            - dt: Δt used (seconds)
-            - n_max: K (maximum lag in steps)
-            - total_trajectories: 1
-            - longest_trajectory_points: N (= track.n_points)
+        MSDResult with fields populated for this single-trajectory TAMSD.
         Returns an empty result if the track has fewer than 2 points.
+
+    Raises:
+        ValueError: If ``drift_corrected=True`` but ``ensemble_drift`` is not provided.
     """
     N = int(track.n_points)
     if N < 2:
@@ -310,13 +446,22 @@ def calculate_time_averaged_msd_per_track(
     y = np.asarray(track.y, dtype=float)
 
     if drift_corrected:
+        if ensemble_drift is None or ensemble_drift.time.size == 0:
+            raise ValueError(
+                "calculate_time_averaged_msd_per_track: drift_corrected=True "
+                "requires a precomputed ensemble_drift (see compute_ensemble_drift). "
+                "Per-track OLS detrending is no longer supported because it biases "
+                "the TAMSD by a factor (1 − τ/T·h(τ/T)) [Qian-Sheetz-Elson 1991, "
+                "Vestergaard et al. 2014]."
+            )
+        # Ensemble (common-mode) drift subtraction — Crocker & Grier 1996.
+        # Map this track's time samples to the global frame grid by index.
         t = np.asarray(track.time, dtype=float)
-        # Subtract linear drift estimated by least-squares regression
-        # x_corr = x - (vx * t + bx), y_corr = y - (vy * t + by)
-        vx, bx = np.polyfit(t, x, 1)
-        vy, by = np.polyfit(t, y, 1)
-        x = x - (vx * t + bx)
-        y = y - (vy * t + by)
+        t_min = float(ensemble_drift.time[0])
+        frames = np.rint((t - t_min) / dt).astype(int)
+        frames = np.clip(frames, 0, ensemble_drift.time.size - 1)
+        x = x - ensemble_drift.Rx[frames]
+        y = y - ensemble_drift.Ry[frames]
 
     tamsd = np.full(K, np.nan, dtype=float)
     tamsd_std = np.full(K, np.nan, dtype=float)

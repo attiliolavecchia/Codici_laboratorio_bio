@@ -52,7 +52,11 @@ from scipy import stats
 from check_ergodicity import compute_ensemble_tamsd
 from comp_glycerol_viscosity import diffusion_coefficient
 from data_reader import read_trajectories_from_csv, estimate_global_time_step
-from msd_analyzer import calculate_ensemble_msd, calculate_time_averaged_msd_per_track
+from msd_analyzer import (
+    calculate_ensemble_msd,
+    calculate_time_averaged_msd_per_track,
+    compute_ensemble_drift,
+)
 from msd_fitting import (
     fit_msd_anomalous_offset,
     anomalous_offset_msd_model,
@@ -173,6 +177,15 @@ def extract_per_track_D(csv_files):
 
         global_dt = estimate_global_time_step(trajectories)
 
+        # Common-mode drift estimated once per file from the FULL ensemble
+        # (Crocker & Grier 1996). Subtracting this preserves each track's
+        # individual diffusive fluctuations while removing the shared drift.
+        ens_drift = compute_ensemble_drift(
+            trajectories, global_dt=global_dt, min_tracks_per_step=5,
+        )
+        print(f"  Ensemble drift: min M per step = {ens_drift.min_M}, "
+              f"K_grid = {ens_drift.time.size}")
+
         eligible = {tid: t for tid, t in trajectories.items()
                     if t.n_points >= MIN_TRACK_POINTS}
         print(f"  Tracks >= {MIN_TRACK_POINTS} pts: {len(eligible)} / {len(trajectories)}")
@@ -184,7 +197,7 @@ def extract_per_track_D(csv_files):
                 # Compute drift-corrected taMSD for this track
                 tamsd = calculate_time_averaged_msd_per_track(
                     track, max_lag_fraction=frac, dt_override=global_dt,
-                    drift_corrected=True,
+                    drift_corrected=True, ensemble_drift=ens_drift,
                 )
                 if tamsd.tau.size < 4:
                     continue

@@ -183,7 +183,8 @@ def compute_tamsd_for_length(track: Trajectory, L: int, *, max_lag_fraction: flo
         raise ValueError("L must be between 2 and the trajectory length")
     if L < track.n_points:
         track = replace(track, time=track.time[:L], x=track.x[:L], y=track.y[:L])
-    ta = calculate_time_averaged_msd_per_track(track, max_lag_fraction=max_lag_fraction)
+    ta = calculate_time_averaged_msd_per_track(track, max_lag_fraction=max_lag_fraction,
+                                                drift_corrected=False)
     return MSDCurves(
         label=f"L = {L} points",
         e_tau_s=[],

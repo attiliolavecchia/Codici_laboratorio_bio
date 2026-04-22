@@ -163,9 +163,10 @@ def extract_per_track_D(csv_files):
             for frac in FIT_FRACTIONS:
                 pct = int(frac * 100)
 
-                # Compute taMSD for this track
+                # Compute taMSD for this track (no drift correction: this dataset is drift-free)
                 tamsd = calculate_time_averaged_msd_per_track(
                     track, max_lag_fraction=frac, dt_override=global_dt,
+                    drift_corrected=False,
                 )
                 if tamsd.tau.size < 3:
                     continue

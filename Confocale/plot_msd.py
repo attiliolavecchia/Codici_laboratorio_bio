@@ -83,7 +83,8 @@ def main() -> None:
                     return
 
         track: Trajectory = trajectories[selected_id]
-        result = calculate_time_averaged_msd_per_track(track, max_lag_fraction=args.max_lag_fraction)
+        result = calculate_time_averaged_msd_per_track(track, max_lag_fraction=args.max_lag_fraction,
+                                                       drift_corrected=False)
         if result.tau.size == 0:
             print("No data to plot.")
             return
