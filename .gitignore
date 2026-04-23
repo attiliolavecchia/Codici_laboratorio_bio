@@ -34,6 +34,7 @@
 !/Confocale/comp_glycerol_viscosity.py
 !/Confocale/diffusion_statistics.py
 !/Confocale/diffusion_statistics_anomalous.py
+!/Confocale/eamsd_vs_tamsd_test.py
 
 
 

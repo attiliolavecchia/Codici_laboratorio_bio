@@ -59,6 +59,7 @@ from msd_analyzer import (
 )
 from msd_fitting import (
     fit_msd_anomalous_offset,
+    fit_msd_linear_offset,
     anomalous_offset_msd_model,
 )
 
@@ -232,6 +233,24 @@ def extract_per_track_D(csv_files):
                 except (ValueError, RuntimeError):
                     pass
 
+                # ── Linear+offset fit with alpha fixed to 1: MSD = 4D*tau + c ──
+                try:
+                    fit_lo = fit_msd_linear_offset(
+                        tamsd.tau, tamsd.msd, tamsd.n_max, tamsd.dt,
+                        fit_fraction=1.0,
+                        msd_sigma=tamsd.msd_sem,
+                    )
+                    rows.append({
+                        **base_row,
+                        "model": "linear_offset",
+                        "D_alpha": fit_lo.D, "D_alpha_error": fit_lo.D_error,
+                        "alpha": 1.0, "alpha_error": 0.0,
+                        "chi2_red": fit_lo.chi_squared_red,
+                        "offset": fit_lo.offset, "offset_error": fit_lo.offset_error,
+                    })
+                except (ValueError, RuntimeError):
+                    pass
+
         print(f"  Collected {sum(1 for r in rows if r['file'] == stem)} fit results.")
 
     df = pd.DataFrame(rows)
@@ -380,6 +399,25 @@ def extract_ensemble_tamsd_D(csv_files):
             except (ValueError, RuntimeError) as e:
                 print(f"    anomalous_offset {pct}%: FAILED — {e}")
 
+            # ── Linear+offset fit (alpha fixed to 1) ──────────
+            try:
+                fit_lo = fit_msd_linear_offset(
+                    tau, msd_mean, n_max, global_dt,
+                    fit_fraction=1.0,
+                    msd_sigma=msd_sem,
+                )
+                rows.append({
+                    **base_row,
+                    "model": "linear_offset",
+                    "D_alpha": fit_lo.D, "D_alpha_error": fit_lo.D_error,
+                    "alpha": 1.0, "alpha_error": 0.0,
+                    "chi2_red": fit_lo.chi_squared_red,
+                    "offset": fit_lo.offset, "offset_error": fit_lo.offset_error,
+                })
+                print(f"    linear_offset (alpha=1) {pct}% OK")
+            except (ValueError, RuntimeError) as e:
+                print(f"    linear_offset (alpha=1) {pct}%: FAILED — {e}")
+
     df = pd.DataFrame(rows)
     print(f"\n[<taMSD>] Total per-file fits: {len(df)}")
     return df
@@ -498,6 +536,7 @@ def analyze_group(group_name, csv_files, group_suffix=""):
     summary_rows = []
 
     model = "anomalous_offset"
+    model_alpha1 = "linear_offset"
     for frac in FIT_FRACTIONS:
         pct = int(frac * 100)
         tag = f"{model}_f{pct:03d}{sfx}"
@@ -615,6 +654,42 @@ def analyze_group(group_name, csv_files, group_suffix=""):
                 ref_line=1.0,
                 ref_label=r"$\alpha = 1$ (normal)",
             )
+
+        # ── Additional requested histograms with alpha fixed to 1 (10% only) ──
+        if np.isclose(frac, 0.10):
+            # taMSD per-track, linear+offset
+            mask_ta_a1 = (df_tamsd["model"] == model_alpha1) & (df_tamsd["fraction"] == frac)
+            D_ta_a1 = (
+                df_tamsd.loc[mask_ta_a1, "D_alpha"].values
+                if not df_tamsd.empty else np.array([])
+            )
+            st_D_ta_a1 = compute_statistics(D_ta_a1)
+            print(f"\ntaMSD | {model_alpha1} (alpha=1) | {pct}% lag fraction | {group_name}")
+            print(f"  N tracks      = {st_D_ta_a1['n']}")
+            if st_D_ta_a1["n"] > 0:
+                _plot_histogram(
+                    D_ta_a1[np.isfinite(D_ta_a1)],
+                    xlabel=r"$D$ [$\mu$m$^2$/s]",
+                    output_path=STATS_DIR / f"tamsd_D_linear_offset_histogram_f{pct:03d}{sfx}.svg",
+                    mean_val=st_D_ta_a1["mean"], median_val=st_D_ta_a1["median"],
+                )
+
+            # <taMSD> per-file, linear+offset
+            mask_et_a1 = (df_ens_tamsd["model"] == model_alpha1) & (df_ens_tamsd["fraction"] == frac)
+            D_et_a1 = (
+                df_ens_tamsd.loc[mask_et_a1, "D_alpha"].values
+                if not df_ens_tamsd.empty else np.array([])
+            )
+            st_D_et_a1 = compute_statistics(D_et_a1)
+            print(f"<taMSD> | {model_alpha1} (alpha=1) | {pct}% lag fraction | {group_name}")
+            print(f"  N files       = {st_D_et_a1['n']}")
+            if st_D_et_a1["n"] > 0:
+                _plot_histogram(
+                    D_et_a1[np.isfinite(D_et_a1)],
+                    xlabel=r"$D$ [$\mu$m$^2$/s]",
+                    output_path=STATS_DIR / f"ens_tamsd_D_linear_offset_histogram_f{pct:03d}{sfx}.svg",
+                    mean_val=st_D_et_a1["mean"], median_val=st_D_et_a1["median"],
+                )
 
         summary_rows.append(dict(
             group=group_name,
