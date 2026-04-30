@@ -80,3 +80,22 @@ find "$DATA_ROOT" -type f -name 'Plot_Values_*.csv' 2>/dev/null | while IFS= rea
   "$PYTHON_BIN" "$SCRIPT_DIR/flim_exponential_fit.py" "${common_args[@]}" --output-dir "$out_dir" --model bi "$csv_path"
 
 done
+
+# -----------------------------------------------------------------------------
+# Optional second pass: TIFF stacks in 2_Fotoni/altro processed with denoising.
+# Produces lifetime_summary_denoised.csv alongside the existing one.
+# -----------------------------------------------------------------------------
+TIFF_DIR="$SCRIPT_DIR/altro"
+if [[ -d "$TIFF_DIR" ]]; then
+  shopt -s nullglob
+  tiff_files=("$TIFF_DIR"/*.tif "$TIFF_DIR"/*.tiff)
+  shopt -u nullglob
+  if (( ${#tiff_files[@]} > 0 )); then
+    echo
+    echo "Running TIFF denoised batch on: $TIFF_DIR"
+    "$PYTHON_BIN" "$SCRIPT_DIR/flim_tiff_fit.py" "$TIFF_DIR" \
+      --batch --denoise --no-show \
+      --laser-rate "$LASER_RATE" \
+      --output-dir "$OUTPUT_ROOT/Batteri"
+  fi
+fi

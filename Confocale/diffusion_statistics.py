@@ -9,14 +9,15 @@ Workflow
 4. One-sample t-test of mean(D) vs D_theory (Einstein-Stokes)
 5. Summary comparison plot D_taMSD vs D_eaMSD vs D_theory
 
-Models:  linear (4Dτ),  nonlinear/drift (4Dτ + v²τ²)
+Models:  linear+offset (4Dτ + c),  nonlinear/drift (4Dτ + v²τ²)
 Fit fractions: 10 % and 25 %
 Dataset: non-anomalous only (Data/31_10_no_anomalous)
 
 Output (SVG for paper, CSV for data):
     Results/no_anomalous/diffusion_statistics/   — histograms, comparison plot
-    Results/no_anomalous/linear_fits/            — per-track linear fit plots
+    Results/no_anomalous/linear_offset_fits/     — linear+offset fit plots
     Results/no_anomalous/nonlinear_fits/         — per-track nonlinear fit plots
+    Results/no_anomalous/residuals/              — residual diagnostics plots
     Docu/diffusion_statistics_results.csv        — tabular results
 
 Usage:
@@ -40,12 +41,8 @@ from check_ergodicity import compute_ensemble_tamsd
 from data_reader import read_trajectories_from_csv, estimate_global_time_step
 from msd_analyzer import calculate_ensemble_msd, calculate_time_averaged_msd_per_track
 from msd_fitting import (
-    fit_msd_linear,
-    linear_msd_model,
     fit_msd_linear_offset,
-    linear_offset_msd_model,
     fit_msd_nonlinear,
-    nonlinear_msd_model,
     analyze_velocities,
     _fit_nonlinear_at_fraction,
 )
@@ -58,6 +55,7 @@ STATS_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "diffusion_statistics"
 LINEAR_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "linear_fits"
 LINEAR_OFFSET_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "linear_offset_fits"
 NONLINEAR_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "nonlinear_fits"
+RESIDUALS_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "residuals"
 DOC_DIR = SCRIPT_DIR / "Docu"
 
 MIN_TRACK_POINTS = 30
@@ -74,29 +72,61 @@ R_PARTICLE = 120e-9  # Particle radius [m]
 
 # ── Plotting helpers ───────────────────────────────────────────────────
 
+def _msd_ylabel(msd_kind: str) -> str:
+    labels = {
+        "eaMSD": r"eaMSD [$\mu$m$^2$]",
+        "taMSD": r"taMSD [$\mu$m$^2$]",
+        "<taMSD>": r"$\langle$taMSD$\rangle$ [$\mu$m$^2$]",
+    }
+    return labels.get(msd_kind, r"MSD [$\mu$m$^2$]")
+
+
+def _msd_data_label(msd_kind: str) -> str:
+    labels = {
+        "eaMSD": "eaMSD Data",
+        "taMSD": "taMSD Data",
+        "<taMSD>": "taMSD Data",
+    }
+    return labels.get(msd_kind, "MSD Data")
+
 def _save_fit_plot(tau_fit, msd_fit, msd_predicted, textstr, fit_label,
-                   output_path, msd_sigma=None, title=None, data_color="C0"):
+                   output_path, msd_sigma=None, title=None, data_color="C0",
+                   msd_kind="MSD", text_below_legend=False):
     """Save a single MSD fit plot (data + curve + annotation box)."""
     fig, ax = plt.subplots(figsize=(8, 6))
+    data_label = _msd_data_label(msd_kind)
     if msd_sigma is not None:
         ax.errorbar(tau_fit, msd_fit, yerr=msd_sigma, fmt="o", color=data_color,
                     markersize=8, alpha=0.7, capsize=4, capthick=1.2,
-                    elinewidth=1.2, label="MSD Data", zorder=2)
+                    elinewidth=1.2, label=data_label, zorder=2)
     else:
         ax.plot(tau_fit, msd_fit, "o", color=data_color, markersize=8, alpha=0.7,
-                label="MSD Data", zorder=2)
+                label=data_label, zorder=2)
     ax.plot(tau_fit, msd_predicted, "-", color="C3", linewidth=2.5,
             label=fit_label, zorder=3)
     ax.set_xlabel(r"Time Lag $\tau$ [s]", fontsize=12)
-    ax.set_ylabel(r"MSD [$\mu$m$^2$]", fontsize=12)
+    ax.set_ylabel(_msd_ylabel(msd_kind), fontsize=12)
     if title:
         ax.set_title(title, fontsize=13)
     ax.grid(True, linestyle=":", alpha=0.4)
     ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
     props = dict(boxstyle="round", facecolor="white", alpha=0.95,
                  edgecolor="black", linewidth=1.2)
-    ax.text(0.98, 0.97, textstr, transform=ax.transAxes, fontsize=11,
-            verticalalignment="top", horizontalalignment="right", bbox=props)
+    ax.text(0.02, 0.87, textstr, transform=ax.transAxes, fontsize=11,
+            verticalalignment="top", horizontalalignment="left", bbox=props)
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _save_residual_plot(tau_fit, residuals, output_path):
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    ax.axhline(0.0, color="black", linestyle="--", linewidth=1.2, alpha=0.8)
+    ax.plot(tau_fit, residuals, "o-", color="C4", linewidth=1.6, markersize=5)
+    ax.set_xlabel(r"Time Lag $\tau$ [s]", fontsize=12)
+    ax.set_ylabel(r"Residuals [$\mu$m$^2$]", fontsize=12)
+    ax.grid(True, linestyle=":", alpha=0.4)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -175,25 +205,6 @@ def extract_per_track_D(csv_files):
                     file=stem, track_id=str(tid), n_points=track.n_points,
                     fraction=frac, dt=global_dt,
                 )
-
-                # ── Linear fit ─────────────────────────────────────
-                try:
-                    fit_lin = fit_msd_linear(
-                        tamsd.tau, tamsd.msd, tamsd.n_max, tamsd.dt,
-                        fit_fraction=1.0,  # already capped by max_lag_fraction
-                        msd_sigma=tamsd.msd_sem,
-                    )
-                    rows.append({
-                        **base_row,
-                        "model": "linear",
-                        "D": fit_lin.D,
-                        "D_error": fit_lin.D_error,
-                        "chi2_red": fit_lin.chi_squared_red,
-                        "v": np.nan,
-                        "v_error": np.nan,
-                    })
-                except (ValueError, RuntimeError):
-                    pass
 
                 # ── Linear+offset fit ──────────────────────────────
                 try:
@@ -274,7 +285,11 @@ def extract_per_file_D(csv_files):
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
 
-            eamsd = calculate_ensemble_msd(trajectories, max_lag_fraction=frac)
+            eamsd = calculate_ensemble_msd(
+                trajectories,
+                max_lag_fraction=frac,
+                drift_corrected=False,
+            )
             if eamsd.tau.size < 3:
                 continue
 
@@ -282,38 +297,6 @@ def extract_per_file_D(csv_files):
                 file=stem, n_tracks=eamsd.total_trajectories,
                 fraction=frac, dt=eamsd.dt,
             )
-
-            # ── Linear fit ─────────────────────────────────────
-            try:
-                fit_lin = fit_msd_linear(
-                    eamsd.tau, eamsd.msd, eamsd.n_max, eamsd.dt,
-                    fit_fraction=1.0,  # data already capped
-                    msd_sigma=eamsd.msd_sem,
-                )
-                rows.append({
-                    **base_row,
-                    "model": "linear",
-                    "D": fit_lin.D,
-                    "D_error": fit_lin.D_error,
-                    "chi2_red": fit_lin.chi_squared_red,
-                    "v": np.nan,
-                    "v_error": np.nan,
-                })
-
-                # Save fit plot
-                tag = f"f{pct:03d}"
-                txt = (r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lin.D, fit_lin.D_error)
-                       + "\n" + r"$\chi^2_\nu = %.4f$" % fit_lin.chi_squared_red)
-                _save_fit_plot(
-                    fit_lin.tau_fit, fit_lin.msd_fit, fit_lin.msd_predicted,
-                    txt, r"Linear: MSD = 4D$\tau$",
-                    LINEAR_DIR / f"{stem}_eamsd_linear_{tag}.svg",
-                    fit_lin.msd_sigma_fit,
-                    #title=f"eaMSD — {stem} — linear {pct}%",
-                    data_color="C0",
-                )
-            except (ValueError, RuntimeError) as e:
-                print(f"    linear {pct}%: FAILED — {e}")
 
             # ── Linear+offset fit ──────────────────────────────
             try:
@@ -347,6 +330,8 @@ def extract_per_file_D(csv_files):
                     LINEAR_OFFSET_DIR / f"{stem}_eamsd_linear_offset_{tag}.svg",
                     fit_lo.msd_sigma_fit,
                     data_color="C0",
+                    msd_kind="eaMSD",
+                    text_below_legend=True,
                 )
             except (ValueError, RuntimeError) as e:
                 print(f"    linear_offset {pct}%: FAILED — {e}")
@@ -388,6 +373,7 @@ def extract_per_file_D(csv_files):
                         NONLINEAR_DIR / f"{stem}_eamsd_nonlinear_{tag}.svg",
                         sig,
                         data_color="C0",
+                        msd_kind="eaMSD",
                     )
                 except (ValueError, RuntimeError) as e:
                     print(f"    nonlinear {pct}%: FAILED — {e}")
@@ -424,7 +410,10 @@ def extract_ensemble_tamsd_D(csv_files):
             pct = int(frac * 100)
 
             tau, msd_mean, msd_sem, _ = compute_ensemble_tamsd(
-                trajectories, max_lag_fraction=frac, global_dt=global_dt,
+                trajectories,
+                max_lag_fraction=frac,
+                global_dt=global_dt,
+                drift_corrected=False,
             )
             if tau.size < 3:
                 continue
@@ -434,36 +423,6 @@ def extract_ensemble_tamsd_D(csv_files):
                 file=stem, n_tracks=len(trajectories),
                 fraction=frac, dt=global_dt,
             )
-
-            # -- Linear fit -----------------------------------------
-            try:
-                fit_lin = fit_msd_linear(
-                    tau, msd_mean, n_max, global_dt,
-                    fit_fraction=1.0,
-                    msd_sigma=msd_sem,
-                )
-                rows.append({
-                    **base_row,
-                    "model": "linear",
-                    "D": fit_lin.D,
-                    "D_error": fit_lin.D_error,
-                    "chi2_red": fit_lin.chi_squared_red,
-                    "v": np.nan,
-                    "v_error": np.nan,
-                })
-
-                tag = f"f{pct:03d}"
-                txt = (r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lin.D, fit_lin.D_error)
-                       + "\n" + r"$\chi^2_\nu = %.4f$" % fit_lin.chi_squared_red)
-                _save_fit_plot(
-                    fit_lin.tau_fit, fit_lin.msd_fit, fit_lin.msd_predicted,
-                    txt, r"Linear: MSD = 4D$\tau$",
-                    LINEAR_DIR / f"{stem}_ens_tamsd_linear_{tag}.svg",
-                    fit_lin.msd_sigma_fit,
-                    data_color="C2",
-                )
-            except (ValueError, RuntimeError) as e:
-                print(f"    linear {pct}%: FAILED -- {e}")
 
             # -- Linear+offset fit ----------------------------------
             try:
@@ -497,6 +456,8 @@ def extract_ensemble_tamsd_D(csv_files):
                     LINEAR_OFFSET_DIR / f"{stem}_ens_tamsd_linear_offset_{tag}.svg",
                     fit_lo.msd_sigma_fit,
                     data_color="C2",
+                    msd_kind="<taMSD>",
+                    text_below_legend=True,
                 )
             except (ValueError, RuntimeError) as e:
                 print(f"    linear_offset {pct}%: FAILED -- {e}")
@@ -538,6 +499,7 @@ def extract_ensemble_tamsd_D(csv_files):
                         NONLINEAR_DIR / f"{stem}_ens_tamsd_nonlinear_{tag}.svg",
                         sig,
                         data_color="C2",
+                        msd_kind="<taMSD>",
                     )
                 except (ValueError, RuntimeError) as e:
                     print(f"    nonlinear {pct}%: FAILED -- {e}")
@@ -545,6 +507,196 @@ def extract_ensemble_tamsd_D(csv_files):
     df = pd.DataFrame(rows)
     print(f"\n[<taMSD>] Total per-file fits: {len(df)}")
     return df
+
+
+def _residual_metrics(tau_fit, residuals):
+    tau_fit = np.asarray(tau_fit, dtype=float)
+    residuals = np.asarray(residuals, dtype=float)
+    mask = np.isfinite(tau_fit) & np.isfinite(residuals)
+    tau_fit = tau_fit[mask]
+    residuals = residuals[mask]
+
+    n = residuals.size
+    if n == 0:
+        return {
+            "n_points": 0,
+            "mean_residual": np.nan,
+            "std_residual": np.nan,
+            "rmse": np.nan,
+            "slope_residual_vs_tau": np.nan,
+            "slope_p_value": np.nan,
+            "positive_residual_fraction": np.nan,
+            "mean_bias_flag": False,
+            "trend_bias_flag": False,
+        }
+
+    mean_res = float(np.mean(residuals))
+    std_res = float(np.std(residuals, ddof=1)) if n > 1 else float("nan")
+    rmse = float(np.sqrt(np.mean(residuals ** 2)))
+    pos_frac = float(np.mean(residuals > 0.0))
+
+    if n >= 3:
+        slope, _intercept, _r, p_val, _stderr = stats.linregress(tau_fit, residuals)
+        slope = float(slope)
+        slope_p = float(p_val)
+    else:
+        slope = float("nan")
+        slope_p = float("nan")
+
+    if n > 1 and np.isfinite(std_res):
+        sem_res = std_res / np.sqrt(n)
+        ci95 = 1.96 * sem_res
+        mean_bias = bool(abs(mean_res) > ci95)
+    else:
+        mean_bias = False
+
+    trend_bias = bool(np.isfinite(slope_p) and slope_p < 0.05)
+
+    return {
+        "n_points": int(n),
+        "mean_residual": mean_res,
+        "std_residual": std_res,
+        "rmse": rmse,
+        "slope_residual_vs_tau": slope,
+        "slope_p_value": slope_p,
+        "positive_residual_fraction": pos_frac,
+        "mean_bias_flag": mean_bias,
+        "trend_bias_flag": trend_bias,
+    }
+
+
+def analyze_linear_offset_residuals(csv_files):
+    """Compute and plot residuals for linear+offset fits on all files."""
+    rows = []
+
+    print(f"\n{'='*100}")
+    print("LINEAR+OFFSET RESIDUAL DIAGNOSTICS (non-anomalous)")
+    print(f"{'='*100}")
+
+    for csv_path in sorted(csv_files):
+        stem = csv_path.stem
+        trajectories = read_trajectories_from_csv(str(csv_path))
+        if not trajectories:
+            continue
+
+        global_dt = estimate_global_time_step(trajectories)
+
+        for frac in FIT_FRACTIONS:
+            pct = int(frac * 100)
+            tag = f"f{pct:03d}"
+
+            # eaMSD residuals
+            try:
+                eamsd = calculate_ensemble_msd(
+                    trajectories,
+                    max_lag_fraction=frac,
+                    drift_corrected=False,
+                )
+                if eamsd.tau.size >= 3:
+                    fit_lo_ea = fit_msd_linear_offset(
+                        eamsd.tau, eamsd.msd, eamsd.n_max, eamsd.dt,
+                        fit_fraction=1.0,
+                        msd_sigma=eamsd.msd_sem,
+                    )
+                    residuals_ea = fit_lo_ea.msd_fit - fit_lo_ea.msd_predicted
+                    metrics_ea = _residual_metrics(fit_lo_ea.tau_fit, residuals_ea)
+
+                    rows.append({
+                        "file": stem,
+                        "estimator": "eaMSD",
+                        "fraction": frac,
+                        "D": fit_lo_ea.D,
+                        "offset": fit_lo_ea.offset,
+                        **metrics_ea,
+                    })
+
+                    _save_residual_plot(
+                        fit_lo_ea.tau_fit,
+                        residuals_ea,
+                        RESIDUALS_DIR / f"{stem}_eamsd_linear_offset_residuals_{tag}.svg",
+                    )
+
+                    print(
+                        f"{stem} | eaMSD | {pct}% | "
+                        f"mean_res={metrics_ea['mean_residual']:.3e}, "
+                        f"rmse={metrics_ea['rmse']:.3e}, "
+                        f"slope={metrics_ea['slope_residual_vs_tau']:.3e}, "
+                        f"p_slope={metrics_ea['slope_p_value']:.3e}, "
+                        f"mean_bias={metrics_ea['mean_bias_flag']}, "
+                        f"trend_bias={metrics_ea['trend_bias_flag']}"
+                    )
+            except (ValueError, RuntimeError) as e:
+                print(f"{stem} | eaMSD | {pct}% | residual FAILED -- {e}")
+
+            # <taMSD> residuals
+            try:
+                tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
+                    trajectories,
+                    max_lag_fraction=frac,
+                    global_dt=global_dt,
+                    drift_corrected=False,
+                )
+                if tau_ta.size >= 3:
+                    fit_lo_ta = fit_msd_linear_offset(
+                        tau_ta, msd_ta, tau_ta.size, global_dt,
+                        fit_fraction=1.0,
+                        msd_sigma=sem_ta,
+                    )
+                    residuals_ta = fit_lo_ta.msd_fit - fit_lo_ta.msd_predicted
+                    metrics_ta = _residual_metrics(fit_lo_ta.tau_fit, residuals_ta)
+
+                    rows.append({
+                        "file": stem,
+                        "estimator": "<taMSD>",
+                        "fraction": frac,
+                        "D": fit_lo_ta.D,
+                        "offset": fit_lo_ta.offset,
+                        **metrics_ta,
+                    })
+
+                    _save_residual_plot(
+                        fit_lo_ta.tau_fit,
+                        residuals_ta,
+                        RESIDUALS_DIR / f"{stem}_ens_tamsd_linear_offset_residuals_{tag}.svg",
+                    )
+
+                    print(
+                        f"{stem} | <taMSD> | {pct}% | "
+                        f"mean_res={metrics_ta['mean_residual']:.3e}, "
+                        f"rmse={metrics_ta['rmse']:.3e}, "
+                        f"slope={metrics_ta['slope_residual_vs_tau']:.3e}, "
+                        f"p_slope={metrics_ta['slope_p_value']:.3e}, "
+                        f"mean_bias={metrics_ta['mean_bias_flag']}, "
+                        f"trend_bias={metrics_ta['trend_bias_flag']}"
+                    )
+            except (ValueError, RuntimeError) as e:
+                print(f"{stem} | <taMSD> | {pct}% | residual FAILED -- {e}")
+
+    df_res = pd.DataFrame(rows)
+    if df_res.empty:
+        print("No residual diagnostics were produced.")
+        return df_res
+
+    residual_csv = DOC_DIR / "diffusion_statistics_linear_offset_residuals.csv"
+    df_res.to_csv(residual_csv, index=False, float_format="%.6e")
+    print(f"Residual diagnostics CSV saved to {residual_csv}")
+
+    print(f"\n{'-'*100}")
+    print("Residual-bias flags summary")
+    for estimator in ("eaMSD", "<taMSD>"):
+        sub = df_res[df_res["estimator"] == estimator]
+        if sub.empty:
+            continue
+        n = len(sub)
+        n_mean = int(sub["mean_bias_flag"].sum())
+        n_trend = int(sub["trend_bias_flag"].sum())
+        print(
+            f"{estimator:>8}: mean-bias flags = {n_mean}/{n}, "
+            f"trend-bias flags = {n_trend}/{n}"
+        )
+    print(f"{'='*100}")
+
+    return df_res
 
 
 def compute_statistics(D_values):
@@ -604,7 +756,7 @@ def analyze_single_file(csv_path: Path, D_theory: float):
 
     # Per model×fraction: histogram, stats, t-test
     summary_rows = []
-    for model in ("linear", "linear_offset", "nonlinear"):
+    for model in ("linear_offset", "nonlinear"):
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
             tag = f"{model}_f{pct:03d}"
@@ -665,7 +817,7 @@ def rank_files_by_D(csv_files, D_theory: float):
         return pd.DataFrame()
 
     ranking_rows = []
-    for model in ("linear", "linear_offset", "nonlinear"):
+    for model in ("linear_offset", "nonlinear"):
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
             mask = (df_all["model"] == model) & (df_all["fraction"] == frac)
@@ -698,7 +850,7 @@ def rank_files_by_D(csv_files, D_theory: float):
     print("PER-FILE RANKING (taMSD per-track D vs D_theory)")
     print(f"D_theory = {D_theory:.6e} um^2/s")
     print(f"{'='*100}")
-    for model in ("linear", "linear_offset", "nonlinear"):
+    for model in ("linear_offset", "nonlinear"):
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
             sel = df_rank[(df_rank["model"] == model) & (df_rank["fraction"] == frac)].copy()
@@ -736,7 +888,7 @@ def main():
     args = parse_args()
 
     # Create output dirs
-    for d in (STATS_DIR, LINEAR_DIR, LINEAR_OFFSET_DIR, NONLINEAR_DIR, DOC_DIR):
+    for d in (STATS_DIR, LINEAR_DIR, LINEAR_OFFSET_DIR, NONLINEAR_DIR, RESIDUALS_DIR, DOC_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     # D_theory in µm²/s
@@ -751,30 +903,49 @@ def main():
         return
 
     # ── Full analysis mode ─────────────────────────────────────
-    # Gather CSV files — keep only independent ones (lowest minstep per experiment)
+    # Gather all CSV files and the independent subset used for statistics.
     all_csv = sorted(DATA_DIR.glob("*.csv"))
-    csv_files = [f for f in all_csv if INDEPENDENT_MINSTEP in f.stem]
-    if not csv_files:
-        print(f"No independent CSV files ({INDEPENDENT_MINSTEP}) in {DATA_DIR}")
+    if not all_csv:
+        print(f"No CSV files in {DATA_DIR}")
         return
-    print(f"\nFound {len(all_csv)} total CSV files, using {len(csv_files)} independent "
-          f"({INDEPENDENT_MINSTEP}) in {DATA_DIR.name}/")
-    for f in csv_files:
+    csv_files_independent = [f for f in all_csv if INDEPENDENT_MINSTEP in f.stem]
+
+    print(f"\nFound {len(all_csv)} total CSV files in {DATA_DIR.name}/")
+    print(f"Independent subset for histograms/statistics: "
+          f"{len(csv_files_independent)} files ({INDEPENDENT_MINSTEP})")
+    for f in csv_files_independent:
         print(f"  {f.name}")
 
-    # Phase B: per-track taMSD D_i
-    df_tamsd = extract_per_track_D(csv_files)
+    # Phase A: generate fit plots for ALL non-anomalous CSV files.
+    # (Requested: do not limit fit generation to 40minstep only.)
+    df_eamsd_all = extract_per_file_D(all_csv)
+    df_ens_tamsd_all = extract_ensemble_tamsd_D(all_csv)
+    analyze_linear_offset_residuals(all_csv)
 
-    # Phase C: per-file eaMSD D
-    df_eamsd = extract_per_file_D(csv_files)
+    # Histograms/statistics remain on the independent 40minstep subset only.
+    if not csv_files_independent:
+        print("No independent files available for histogram/statistics stage.")
+        print("Fit plots and residual diagnostics were still generated for all CSV files.")
+        return
 
-    # Phase C2: per-file ensemble-averaged taMSD D
-    df_ens_tamsd = extract_ensemble_tamsd_D(csv_files)
+    # Phase B: per-track taMSD D_i (independent subset only)
+    df_tamsd = extract_per_track_D(csv_files_independent)
+
+    independent_stems = {f.stem for f in csv_files_independent}
+    if (not df_eamsd_all.empty) and ("file" in df_eamsd_all.columns):
+        df_eamsd = df_eamsd_all[df_eamsd_all["file"].isin(independent_stems)].copy()
+    else:
+        df_eamsd = pd.DataFrame(columns=["file", "model", "fraction", "D"])
+
+    if (not df_ens_tamsd_all.empty) and ("file" in df_ens_tamsd_all.columns):
+        df_ens_tamsd = df_ens_tamsd_all[df_ens_tamsd_all["file"].isin(independent_stems)].copy()
+    else:
+        df_ens_tamsd = pd.DataFrame(columns=["file", "model", "fraction", "D"])
 
     # Phase D+E: histograms, statistics, and t-tests
     summary_rows = []
 
-    for model in ("linear", "linear_offset", "nonlinear"):
+    for model in ("linear_offset", "nonlinear"):
         for frac in FIT_FRACTIONS:
             pct = int(frac * 100)
             tag = f"{model}_f{pct:03d}"
@@ -909,7 +1080,7 @@ def main():
         print(f"Per-file <taMSD> CSV saved to {ens_tamsd_csv}")
 
     # ── Per-file ranking (taMSD per-track D vs D_theory) ───────
-    rank_files_by_D(csv_files, D_theory)
+    rank_files_by_D(csv_files_independent, D_theory)
 
     # ── Final summary table ─────────────────────────────────────
     print(f"\n{'='*120}")

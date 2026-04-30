@@ -12,8 +12,13 @@ For an 80 MHz pulsed laser:
 - Laser period = 1 / 80 MHz = 12.5 ns
 - With 128 time bins: Δt = 12.5 ns / 128 ≈ 0.0977 ns per bin
 
-Author: Generated for FLIM analysis
-Date: December 2025
+Quick start:
+    python flim_data_reader.py "Plot Values.csv"
+    python flim_data_reader.py "Plot Values.csv" --laser-rate 80
+
+Main options:
+    csv                   Path to CSV file with columns X and Y
+    --laser-rate FLOAT    Laser repetition rate in MHz (default: 80)
 """
 
 import numpy as np

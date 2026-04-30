@@ -95,29 +95,48 @@ D_SE = {
 
 # ── Plotting helpers ───────────────────────────────────────────────────
 
+def _msd_ylabel(msd_kind: str) -> str:
+    labels = {
+        "eaMSD": r"eaMSD [$\mu$m$^2$]",
+        "taMSD": r"taMSD [$\mu$m$^2$]",
+        "<taMSD>": r"$\langle$taMSD$\rangle$ [$\mu$m$^2$]",
+    }
+    return labels.get(msd_kind, r"MSD [$\mu$m$^2$]")
+
+
+def _msd_data_label(msd_kind: str) -> str:
+    labels = {
+        "eaMSD": "eaMSD Data",
+        "taMSD": "taMSD Data",
+        "<taMSD>": "taMSD Data",
+    }
+    return labels.get(msd_kind, "MSD Data")
+
 def _save_fit_plot(tau_fit, msd_fit, msd_predicted, textstr, fit_label,
-                   output_path, msd_sigma=None, title=None, data_color="C0"):
+                   output_path, msd_sigma=None, title=None, data_color="C0",
+                   msd_kind="MSD", text_below_legend=True):
     """Save a single MSD fit plot (data + curve + annotation box)."""
     fig, ax = plt.subplots(figsize=(8, 6))
+    data_label = _msd_data_label(msd_kind)
     if msd_sigma is not None:
         ax.errorbar(tau_fit, msd_fit, yerr=msd_sigma, fmt="o", color=data_color,
                     markersize=8, alpha=0.7, capsize=4, capthick=1.2,
-                    elinewidth=1.2, label="MSD Data", zorder=2)
+                    elinewidth=1.2, label=data_label, zorder=2)
     else:
         ax.plot(tau_fit, msd_fit, "o", color=data_color, markersize=8, alpha=0.7,
-                label="MSD Data", zorder=2)
+                label=data_label, zorder=2)
     ax.plot(tau_fit, msd_predicted, "-", color="C3", linewidth=2.5,
             label=fit_label, zorder=3)
     ax.set_xlabel(r"Time Lag $\tau$ [s]", fontsize=12)
-    ax.set_ylabel(r"MSD [$\mu$m$^2$]", fontsize=12)
+    ax.set_ylabel(_msd_ylabel(msd_kind), fontsize=12)
     if title:
         ax.set_title(title, fontsize=13)
     ax.grid(True, linestyle=":", alpha=0.4)
     ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
     props = dict(boxstyle="round", facecolor="white", alpha=0.95,
                  edgecolor="black", linewidth=1.2)
-    ax.text(0.98, 0.97, textstr, transform=ax.transAxes, fontsize=11,
-            verticalalignment="top", horizontalalignment="right", bbox=props)
+    ax.text(0.02, 0.87, textstr, transform=ax.transAxes, fontsize=11,
+            verticalalignment="top", horizontalalignment="left", bbox=props)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -319,6 +338,7 @@ def extract_per_file_D(csv_files):
                     r"Drift-corr. anom.+offset: 4$D_\alpha\tau^\alpha$ + $c$",
                     LINEAR_OFFSET_DIR / f"{stem}_eamsd_anomalous_offset_{tag}.svg",
                     fit_ao.msd_sigma_fit, data_color="C0",
+                    msd_kind="eaMSD", text_below_legend=True,
                 )
                 print(f"    anomalous_offset {pct}% OK")
             except (ValueError, RuntimeError) as e:
@@ -394,6 +414,7 @@ def extract_ensemble_tamsd_D(csv_files):
                     r"Drift-corr. anom.+offset: 4$D_\alpha\tau^\alpha$ + $c$",
                     LINEAR_OFFSET_DIR / f"{stem}_ens_tamsd_anomalous_offset_{tag}.svg",
                     fit_ao.msd_sigma_fit, data_color="C2",
+                    msd_kind="<taMSD>", text_below_legend=True,
                 )
                 print(f"    anomalous_offset {pct}% OK")
             except (ValueError, RuntimeError) as e:

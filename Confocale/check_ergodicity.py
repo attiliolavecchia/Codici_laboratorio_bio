@@ -153,13 +153,20 @@ def run_d_comparison(files):
             continue
 
         # EA-MSD
-        ea = calculate_ensemble_msd(trajectories, max_lag_fraction=msd_lag_fraction)
+        ea = calculate_ensemble_msd(
+            trajectories,
+            max_lag_fraction=msd_lag_fraction,
+            drift_corrected=False,
+        )
         if ea.tau.size == 0:
             continue
 
         # Ensemble-averaged TA-MSD
         tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
-            trajectories, max_lag_fraction=msd_lag_fraction, global_dt=ea.dt,
+            trajectories,
+            max_lag_fraction=msd_lag_fraction,
+            global_dt=ea.dt,
+            drift_corrected=False,
         )
 
         # Trim to common length

@@ -15,6 +15,19 @@ For TCSPC data with an 80 MHz laser:
 
 Author: Generated for FLIM analysis
 Date: December 2025
+
+Quick start:
+    python flim_exponential_fit.py "Plot Values.csv" --model mono
+    python flim_exponential_fit.py "Plot Values.csv" --model bi --no-show
+
+Main options:
+    --model {mono,bi}      Choose mono- or bi-exponential fit
+    --laser-rate FLOAT     Laser repetition rate in MHz (default: 80)
+    --fit-start FLOAT      Manual fit start in ns (default: auto peak)
+    --fit-end FLOAT        Manual fit end in ns (default: auto last non-zero)
+    --output-dir PATH      Output folder for SVG and time-intensity CSV
+    --output-name NAME     Custom output filename prefix
+    --no-show              Save plot without opening the window
 """
 
 import numpy as np
@@ -200,6 +213,43 @@ def auto_fit_indices_from_peak_to_last_nonzero(
         end_idx = min(len(data.intensity), start_idx + 2)
 
     return start_idx, end_idx
+
+
+def _closest_time_index(time_ns: np.ndarray, target_ns: float) -> int:
+    """Return index of the sample closest to target time (ns)."""
+    return int(np.argmin(np.abs(time_ns - target_ns)))
+
+
+def resolve_fit_indices(
+    data: FLIMData,
+    fit_start_ns: Optional[float],
+    fit_end_ns: Optional[float]
+) -> Tuple[int, int, bool]:
+    """
+    Resolve fit slice indices from optional manual times.
+
+    Returns:
+        (start_idx, end_idx, auto_used), where end_idx is exclusive.
+    """
+    auto_start_idx, auto_end_idx = auto_fit_indices_from_peak_to_last_nonzero(data)
+
+    if fit_start_ns is None:
+        start_idx = auto_start_idx
+        auto_used = True
+    else:
+        start_idx = _closest_time_index(data.time_ns, fit_start_ns)
+        auto_used = False
+
+    if fit_end_ns is None:
+        end_idx = auto_end_idx
+    else:
+        end_idx = _closest_time_index(data.time_ns, fit_end_ns)
+
+    # Keep behavior stable and avoid empty/invalid slices.
+    if end_idx <= start_idx:
+        end_idx = min(len(data.intensity), start_idx + 2)
+
+    return start_idx, end_idx, auto_used
 
 
 def fit_mono_exponential(
@@ -507,14 +557,14 @@ def plot_bi_exponential_fit(
         r'$\mathbf{Bi-exponential\ Fit}$',
         r'$I(t) = A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2}$',
         '',
-        fr'$A_1 = {fit_result.A1:.4f} \\pm {fit_result.A1_error:.4f}$',
-        fr'$\\tau_1 = {fit_result.tau1:.3f} \\pm {fit_result.tau1_error:.3f}\,ns$',
+        f'$A_1$ = {fit_result.A1:.4f} ± {fit_result.A1_error:.4f}',
+        f'$\\tau_1$ = {fit_result.tau1:.3f} ± {fit_result.tau1_error:.3f} ns',
         '',
-        fr'$A_2 = {fit_result.A2:.4f} \\pm {fit_result.A2_error:.4f}$',
-        fr'$\\tau_2 = {fit_result.tau2:.3f} \\pm {fit_result.tau2_error:.3f}\,ns$',
+        f'$A_2$ = {fit_result.A2:.4f} ± {fit_result.A2_error:.4f}',
+        f'$\\tau_2$ = {fit_result.tau2:.3f} ± {fit_result.tau2_error:.3f} ns',
         '',
-        fr'$\\langle\\tau\\rangle = {fit_result.tau_avg:.3f}\,ns$',
-        fr'$R^2 = {fit_result.R_squared:.6f}$'
+        f'$\\langle\\tau\\rangle$ = {fit_result.tau_avg:.3f} ns',
+        f'$R^2$ = {fit_result.R_squared:.6f}'
     ])
     
     props = dict(boxstyle='round', facecolor='white', alpha=0.95, edgecolor='gray')
@@ -652,20 +702,9 @@ FLIM Theory:
     print(f"\nTime-intensity data saved to: {csv_output_path}")
     
     # Determine fit range
-    if args.fit_start is not None:
-        # Find index closest to specified start time
-        start_idx = np.argmin(np.abs(data.time_ns - args.fit_start))
-        auto_used = False
-    else:
-        start_idx, _ = auto_fit_indices_from_peak_to_last_nonzero(data)
-        auto_used = True
+    start_idx, end_idx, auto_used = resolve_fit_indices(data, args.fit_start, args.fit_end)
+    if auto_used:
         print(f"\nAuto-detected peak at bin {start_idx} (t = {data.peak_time_ns:.2f} ns)")
-
-    if args.fit_end is not None:
-        end_idx = np.argmin(np.abs(data.time_ns - args.fit_end))
-    else:
-        # Auto end: last non-zero after peak (inclusive -> exclusive slice)
-        _, end_idx = auto_fit_indices_from_peak_to_last_nonzero(data)
 
     # Extract decay region
     time_decay, intensity_decay = extract_decay_region(data, start_idx, end_idx)

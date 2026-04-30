@@ -8,7 +8,7 @@ For every CSV in each dataset:
 Output:
     Results/<label>/eamsd/   — EA-MSD SVGs
     Results/<label>/tamsd/   — TA-MSD SVGs
-    Results/<label>/fits/    — Fit SVGs (linear_fits/ and nonlinear_fits/)
+    Results/<label>/fits/    — Fit SVGs (linear_offset_fits/ and nonlinear_fits/)
     Docu/                    — Summary CSV + Markdown tables
 
 Usage:
@@ -32,11 +32,13 @@ from msd_analyzer import (
     compute_ensemble_drift,
 )
 from msd_fitting import (
-    fit_msd_linear, linear_msd_model,
-    fit_msd_nonlinear, nonlinear_msd_model, analyze_velocities,
-    fit_msd_anomalous, anomalous_msd_model,
-    fit_msd_anomalous_drift, anomalous_drift_msd_model,
-    fit_msd_anomalous_offset, anomalous_offset_msd_model,
+    fit_msd_linear,
+    fit_msd_linear_offset,
+    fit_msd_nonlinear,
+    analyze_velocities,
+    fit_msd_anomalous,
+    fit_msd_anomalous_drift,
+    fit_msd_anomalous_offset,
 )
 from plot_msd import plot_and_save
 
@@ -50,7 +52,7 @@ DATASETS = {
 
 # Which fit models to run per dataset
 DATASET_MODELS = {
-    "no_anomalous": ["linear", "nonlinear"],
+    "no_anomalous": ["linear_offset", "nonlinear"],
     "anomalous":    ["anomalous_offset"],
 }
 
@@ -61,26 +63,46 @@ LAG_FRACTIONS = [0.10, 0.25]
 # Fit-plot helper (same style as fit_msd.py)
 # ---------------------------------------------------------------------------
 
+def _msd_ylabel(msd_kind: str) -> str:
+    labels = {
+        "eaMSD": r"eaMSD [$\mu$m$^2$]",
+        "taMSD": r"taMSD [$\mu$m$^2$]",
+        "<taMSD>": r"$\langle$taMSD$\rangle$ [$\mu$m$^2$]",
+    }
+    return labels.get(msd_kind, r"MSD [$\mu$m$^2$]")
+
+
+def _msd_data_label(msd_kind: str) -> str:
+    labels = {
+        "eaMSD": "eaMSD Data",
+        "taMSD": "taMSD Data",
+        "<taMSD>": "taMSD Data",
+    }
+    return labels.get(msd_kind, "MSD Data")
+
+
 def _save_fit_plot(tau_fit, msd_fit, msd_predicted, textstr, fit_label,
-                   output_path, msd_sigma=None):
+                   output_path, msd_sigma=None, msd_kind="MSD",
+                   text_below_legend=False):
     fig, ax = plt.subplots(figsize=(8, 6))
+    data_label = _msd_data_label(msd_kind)
     if msd_sigma is not None:
         ax.errorbar(tau_fit, msd_fit, yerr=msd_sigma, fmt="o", color="C0",
                     markersize=8, alpha=0.7, capsize=4, capthick=1.2,
-                    elinewidth=1.2, label="MSD Data", zorder=2)
+                    elinewidth=1.2, label=data_label, zorder=2)
     else:
         ax.plot(tau_fit, msd_fit, "o", color="C0", markersize=8, alpha=0.7,
-                label="MSD Data", zorder=2)
+                label=data_label, zorder=2)
     ax.plot(tau_fit, msd_predicted, "-", color="C3", linewidth=2.5,
             label=fit_label, zorder=3)
     ax.set_xlabel(r"Time Lag $\tau$ [s]", fontsize=12)
-    ax.set_ylabel(r"MSD [$\mu$m$^2$]", fontsize=12)
+    ax.set_ylabel(_msd_ylabel(msd_kind), fontsize=12)
     ax.grid(True, linestyle=":", alpha=0.4)
     ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
     props = dict(boxstyle="round", facecolor="white", alpha=0.95,
                  edgecolor="black", linewidth=1.2)
-    ax.text(0.98, 0.97, textstr, transform=ax.transAxes, fontsize=11,
-            verticalalignment="top", horizontalalignment="right", bbox=props)
+    ax.text(0.02, 0.87, textstr, transform=ax.transAxes, fontsize=11,
+            verticalalignment="top", horizontalalignment="left", bbox=props)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -158,9 +180,11 @@ def run_fits(csv_file: Path, label: str) -> list[dict]:
         return []
 
     stem = csv_file.stem
-    linear_dir    = SCRIPT_DIR / "Results" / label / "linear_fits"
+    linear_dir = SCRIPT_DIR / "Results" / label / "linear_fits"
+    linear_offset_dir = SCRIPT_DIR / "Results" / label / "linear_offset_fits"
     nonlinear_dir = SCRIPT_DIR / "Results" / label / "nonlinear_fits"
     linear_dir.mkdir(parents=True, exist_ok=True)
+    linear_offset_dir.mkdir(parents=True, exist_ok=True)
     nonlinear_dir.mkdir(parents=True, exist_ok=True)
 
     summary = []
@@ -169,7 +193,7 @@ def run_fits(csv_file: Path, label: str) -> list[dict]:
         try:
             row = _run_single_fit(
                 model, msd_result, trajectories, stem,
-                linear_dir, nonlinear_dir, label, csv_file.name,
+                linear_dir, linear_offset_dir, nonlinear_dir, label, csv_file.name,
             )
             summary.append(row)
             print(f"    {model} OK")
@@ -180,7 +204,8 @@ def run_fits(csv_file: Path, label: str) -> list[dict]:
 
 
 def _run_single_fit(model, msd_result, trajectories, stem,
-                    linear_dir, nonlinear_dir, dataset_label, filename):
+                    linear_dir, linear_offset_dir, nonlinear_dir,
+                    dataset_label, filename):
     """Run one fit model and return a summary dict."""
     tau, msd = msd_result.tau, msd_result.msd
     n_max, dt = msd_result.n_max, msd_result.dt
@@ -192,9 +217,30 @@ def _run_single_fit(model, msd_result, trajectories, stem,
                + "\n" + r"$\chi^2_\nu = %.4f$" % fit.chi_squared_red)
         out = linear_dir / f"{stem}_linear_fit.svg"
         _save_fit_plot(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
-                       r"Linear: MSD = 4D$\tau$", out, fit.msd_sigma_fit)
+                       r"Linear: MSD = 4D$\tau$", out, fit.msd_sigma_fit,
+                       msd_kind="eaMSD")
         return dict(Dataset=dataset_label, File=filename,
                     Model="Linear (4Dτ)",
+                    D=f"{fit.D:.4e}", D_err=f"{fit.D_error:.2e}",
+                    alpha="N/A", alpha_err="N/A",
+                    v="N/A", v_err="N/A",
+                    chi2_red=f"{fit.chi_squared_red:.4f}")
+
+    elif model == "linear_offset":
+        fit = fit_msd_linear_offset(tau, msd, n_max, dt, msd_sigma=sigma)
+        txt = "\n".join([
+            r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit.D, fit.D_error),
+            r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit.offset, fit.offset_error),
+            r"$\chi^2_\nu = %.4f$" % fit.chi_squared_red,
+        ])
+        out = linear_offset_dir / f"{stem}_linear_offset_fit.svg"
+        _save_fit_plot(
+            fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
+            r"Linear+offset: MSD = 4D$\tau$ + $c$", out,
+            fit.msd_sigma_fit, msd_kind="eaMSD", text_below_legend=True,
+        )
+        return dict(Dataset=dataset_label, File=filename,
+                    Model="Linear+Offset (4Dτ + c)",
                     D=f"{fit.D:.4e}", D_err=f"{fit.D_error:.2e}",
                     alpha="N/A", alpha_err="N/A",
                     v="N/A", v_err="N/A",
@@ -211,7 +257,8 @@ def _run_single_fit(model, msd_result, trajectories, stem,
         ])
         out = nonlinear_dir / f"{stem}_nonlinear_fit.svg"
         _save_fit_plot(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
-                       r"Nonlinear: MSD = 4D$\tau$ + $v^2\tau^2$", out, fit.msd_sigma_fit)
+                       r"Nonlinear: MSD = 4D$\tau$ + $v^2\tau^2$", out,
+                       fit.msd_sigma_fit, msd_kind="eaMSD")
         return dict(Dataset=dataset_label, File=filename,
                     Model="Nonlinear (4Dτ + v²τ²)",
                     D=f"{fit.D:.4e}", D_err=f"{fit.D_error:.2e}",
@@ -228,7 +275,8 @@ def _run_single_fit(model, msd_result, trajectories, stem,
         ])
         out = linear_dir / f"{stem}_anomalous_fit.svg"
         _save_fit_plot(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
-                       r"Anomalous: MSD = 4$D_\alpha \tau^\alpha$", out)
+                       r"Anomalous: MSD = 4$D_\alpha \tau^\alpha$", out,
+                       msd_kind="eaMSD")
         return dict(Dataset=dataset_label, File=filename,
                     Model="Anomalous (4D_α τ^α)",
                     D=f"{fit.D_alpha:.4e}", D_err=f"{fit.D_alpha_error:.2e}",
@@ -247,7 +295,7 @@ def _run_single_fit(model, msd_result, trajectories, stem,
         out = linear_dir / f"{stem}_anomalous_offset_fit.svg"
         _save_fit_plot(fit.tau_fit, fit.msd_fit, fit.msd_predicted, txt,
                        r"Drift-corr. anom.+offset: 4$D_\alpha \tau^\alpha$ + $c$", out,
-                       fit.msd_sigma_fit)
+                       fit.msd_sigma_fit, msd_kind="eaMSD")
         return dict(Dataset=dataset_label, File=filename,
                     Model="AnomalousOffset (4D_α τ^α + c)",
                     D=f"{fit.D_alpha:.4e}", D_err=f"{fit.D_alpha_error:.2e}",

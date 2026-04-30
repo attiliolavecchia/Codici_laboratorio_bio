@@ -231,7 +231,7 @@ def plot_loglog_overlay(group_name, results, frac, out_path):
             rf"$\alpha_{{\langle TA \rangle}}$  = {med_alpha_ta:.3f}"
         )
         ax.text(
-            0.03, 0.97, alpha_text,
+            0.02, 0.87, alpha_text,
             transform=ax.transAxes,
             va="top", ha="left", fontsize=10,
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
