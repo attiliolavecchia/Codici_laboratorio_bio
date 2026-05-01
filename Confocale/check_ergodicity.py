@@ -68,7 +68,7 @@ def compute_ensemble_tamsd(trajectories, max_lag_fraction=None, global_dt=None,
     ----------
     drift_corrected : bool
         If True, pass ``drift_corrected=True`` to each per-track TA-MSD
-        computation (linear drift subtraction via regression).
+        computation (ensemble common-mode drift subtraction).
 
     Returns (tau, msd_mean, msd_sem, per_track_matrix) where
     *per_track_matrix* is a (M, K) float array of individual TA-MSD curves

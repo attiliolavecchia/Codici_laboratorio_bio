@@ -120,13 +120,33 @@ def _save_fit_plot(tau_fit, msd_fit, msd_predicted, textstr, fit_label,
     plt.close(fig)
 
 
-def _save_residual_plot(tau_fit, residuals, output_path):
+def _save_residual_plot(tau_fit, residuals, output_path, msd_kind="MSD"):
+    kind = str(msd_kind).lower()
+    if kind == "eamsd":
+        residual_color = "C0"  # match eaMSD fit-point color (blue)
+        residual_label = "eaMSD"
+    elif kind in ("tamsd", "<tamsd>"):
+        residual_color = "C2"  # match taMSD fit-point color (green)
+        residual_label = "taMSD"
+    else:
+        residual_color = "C4"
+        residual_label = "MSD"
+
     fig, ax = plt.subplots(figsize=(8, 4.8))
     ax.axhline(0.0, color="black", linestyle="--", linewidth=1.2, alpha=0.8)
-    ax.plot(tau_fit, residuals, "o-", color="C4", linewidth=1.6, markersize=5)
+    ax.plot(
+        tau_fit,
+        residuals,
+        "o-",
+        color=residual_color,
+        linewidth=1.6,
+        markersize=5,
+        label=residual_label,
+    )
     ax.set_xlabel(r"Time Lag $\tau$ [s]", fontsize=12)
     ax.set_ylabel(r"Residuals [$\mu$m$^2$]", fontsize=12)
     ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -614,6 +634,7 @@ def analyze_linear_offset_residuals(csv_files):
                         fit_lo_ea.tau_fit,
                         residuals_ea,
                         RESIDUALS_DIR / f"{stem}_eamsd_linear_offset_residuals_{tag}.svg",
+                        msd_kind="eaMSD",
                     )
 
                     print(
@@ -658,6 +679,7 @@ def analyze_linear_offset_residuals(csv_files):
                         fit_lo_ta.tau_fit,
                         residuals_ta,
                         RESIDUALS_DIR / f"{stem}_ens_tamsd_linear_offset_residuals_{tag}.svg",
+                        msd_kind="taMSD",
                     )
 
                     print(

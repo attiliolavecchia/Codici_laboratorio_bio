@@ -15,7 +15,7 @@ Workflow
 
 Drift correction:
     eaMSD:  variance method — MSD_corr(τ) = Var(Δx) + Var(Δy)
-    taMSD:  per-track linear drift subtraction via regression
+    taMSD:  ensemble common-mode drift subtraction (Crocker-Grier)
 
 Model (after drift correction):
     anomalous_offset: MSD(τ) = 4D_α τ^α + c   (c = 4σ², localization error)
@@ -28,6 +28,7 @@ Dataset: anomalous only (Data/14_11_anomalous)
 Output (SVG for paper, CSV for data):
     Results/anomalous/diffusion_statistics/     — histograms
     Results/anomalous/linear_offset_fits/       — anomalous_offset fit plots
+    Results/anomalous/residuals/                — anomalous residual diagnostics plots
     Docu/diffusion_statistics_anomalous_*.csv   — tabular results
     Docu/diffusion_drift_corrected_vs_DSE.csv   — D_α / D_SE comparison
 
@@ -68,6 +69,7 @@ SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "Data" / "14_11_anomalous"
 STATS_DIR = SCRIPT_DIR / "Results" / "anomalous" / "diffusion_statistics"
 LINEAR_OFFSET_DIR = SCRIPT_DIR / "Results" / "anomalous" / "linear_offset_fits"
+RESIDUALS_DIR = SCRIPT_DIR / "Results" / "anomalous" / "residuals"
 DOC_DIR = SCRIPT_DIR / "Docu"
 
 MIN_TRACK_POINTS = 30
@@ -105,12 +107,12 @@ def _msd_ylabel(msd_kind: str) -> str:
 
 
 def _msd_data_label(msd_kind: str) -> str:
-    labels = {
-        "eaMSD": "eaMSD Data",
-        "taMSD": "taMSD Data",
-        "<taMSD>": "taMSD Data",
-    }
-    return labels.get(msd_kind, "MSD Data")
+    kind = str(msd_kind).strip().lower()
+    if kind == "eamsd":
+        return "eaMSD Data"
+    if kind in ("tamsd", "<tamsd>"):
+        return "taMSD Data"
+    return "MSD Data"
 
 def _save_fit_plot(tau_fit, msd_fit, msd_predicted, textstr, fit_label,
                    output_path, msd_sigma=None, title=None, data_color="C0",
@@ -166,6 +168,39 @@ def _plot_histogram(values, xlabel, output_path,
         ax.set_title(title, fontsize=13)
     ax.legend(fontsize=10)
     ax.grid(True, linestyle=":", alpha=0.4)
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _save_residual_plot(tau_fit, residuals, output_path, msd_kind="MSD"):
+    kind = str(msd_kind).lower()
+    if kind == "eamsd":
+        residual_color = "C0"
+        residual_label = "eaMSD"
+    elif kind in ("tamsd", "<tamsd>"):
+        residual_color = "C2"
+        residual_label = "taMSD"
+    else:
+        residual_color = "C4"
+        residual_label = "MSD"
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    ax.axhline(0.0, color="black", linestyle="--", linewidth=1.2, alpha=0.8)
+    ax.plot(
+        tau_fit,
+        residuals,
+        "o-",
+        color=residual_color,
+        linewidth=1.6,
+        markersize=5,
+        label=residual_label,
+    )
+    ax.set_xlabel(r"Time Lag $\tau$ [s]", fontsize=12)
+    ax.set_ylabel(r"Residuals [$\mu$m$^2$]", fontsize=12)
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(loc="upper left", fontsize=10, framealpha=0.9)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -526,6 +561,205 @@ def one_sample_ttest(values, reference):
     return float(t_stat), float(p_val)
 
 
+def _residual_metrics(tau_fit, residuals):
+    tau_fit = np.asarray(tau_fit, dtype=float)
+    residuals = np.asarray(residuals, dtype=float)
+    mask = np.isfinite(tau_fit) & np.isfinite(residuals)
+    tau_fit = tau_fit[mask]
+    residuals = residuals[mask]
+
+    n = residuals.size
+    if n == 0:
+        return {
+            "n_points": 0,
+            "mean_residual": np.nan,
+            "std_residual": np.nan,
+            "rmse": np.nan,
+            "slope_residual_vs_tau": np.nan,
+            "slope_p_value": np.nan,
+            "positive_residual_fraction": np.nan,
+            "mean_bias_flag": False,
+            "trend_bias_flag": False,
+        }
+
+    mean_res = float(np.mean(residuals))
+    std_res = float(np.std(residuals, ddof=1)) if n > 1 else float("nan")
+    rmse = float(np.sqrt(np.mean(residuals ** 2)))
+    pos_frac = float(np.mean(residuals > 0.0))
+
+    if n >= 3:
+        slope, _intercept, _r, p_val, _stderr = stats.linregress(tau_fit, residuals)
+        slope = float(slope)
+        slope_p = float(p_val)
+    else:
+        slope = float("nan")
+        slope_p = float("nan")
+
+    if n > 1 and np.isfinite(std_res):
+        sem_res = std_res / np.sqrt(n)
+        ci95 = 1.96 * sem_res
+        mean_bias = bool(abs(mean_res) > ci95)
+    else:
+        mean_bias = False
+
+    trend_bias = bool(np.isfinite(slope_p) and slope_p < 0.05)
+
+    return {
+        "n_points": int(n),
+        "mean_residual": mean_res,
+        "std_residual": std_res,
+        "rmse": rmse,
+        "slope_residual_vs_tau": slope,
+        "slope_p_value": slope_p,
+        "positive_residual_fraction": pos_frac,
+        "mean_bias_flag": mean_bias,
+        "trend_bias_flag": trend_bias,
+    }
+
+
+def analyze_anomalous_offset_residuals(csv_files, group_suffix=""):
+    """Compute and plot residual diagnostics for anomalous+offset fits."""
+    rows = []
+
+    print(f"\n{'='*100}")
+    print(f"ANOMALOUS+OFFSET RESIDUAL DIAGNOSTICS ({group_suffix or 'all'})")
+    print(f"{'='*100}")
+
+    for csv_path in sorted(csv_files):
+        stem = csv_path.stem
+        trajectories = read_trajectories_from_csv(str(csv_path))
+        if not trajectories:
+            continue
+
+        global_dt = estimate_global_time_step(trajectories)
+
+        for frac in FIT_FRACTIONS:
+            pct = int(frac * 100)
+            tag = f"f{pct:03d}"
+
+            # eaMSD residuals (drift-corrected, variance method)
+            try:
+                eamsd = calculate_ensemble_msd(
+                    trajectories,
+                    max_lag_fraction=frac,
+                    drift_corrected=True,
+                )
+                if eamsd.tau.size >= 4:
+                    fit_ao_ea = fit_msd_anomalous_offset(
+                        eamsd.tau, eamsd.msd, eamsd.n_max, eamsd.dt,
+                        fit_fraction=1.0,
+                        msd_sigma=eamsd.msd_sem,
+                    )
+                    residuals_ea = fit_ao_ea.msd_fit - fit_ao_ea.msd_predicted
+                    metrics_ea = _residual_metrics(fit_ao_ea.tau_fit, residuals_ea)
+
+                    rows.append({
+                        "file": stem,
+                        "group": group_suffix,
+                        "estimator": "eaMSD",
+                        "model": "anomalous_offset",
+                        "fraction": frac,
+                        "D_alpha": fit_ao_ea.D_alpha,
+                        "alpha": fit_ao_ea.alpha,
+                        "offset": fit_ao_ea.offset,
+                        **metrics_ea,
+                    })
+
+                    _save_residual_plot(
+                        fit_ao_ea.tau_fit,
+                        residuals_ea,
+                        RESIDUALS_DIR / f"{stem}_eamsd_anomalous_offset_residuals_{tag}.svg",
+                        msd_kind="eaMSD",
+                    )
+
+                    print(
+                        f"{stem} | eaMSD | {pct}% | "
+                        f"mean_res={metrics_ea['mean_residual']:.3e}, "
+                        f"rmse={metrics_ea['rmse']:.3e}, "
+                        f"slope={metrics_ea['slope_residual_vs_tau']:.3e}, "
+                        f"p_slope={metrics_ea['slope_p_value']:.3e}, "
+                        f"mean_bias={metrics_ea['mean_bias_flag']}, "
+                        f"trend_bias={metrics_ea['trend_bias_flag']}"
+                    )
+            except (ValueError, RuntimeError) as e:
+                print(f"{stem} | eaMSD | {pct}% | residual FAILED -- {e}")
+
+            # <taMSD> residuals (drift-corrected, ensemble drift subtraction)
+            try:
+                tau_et, msd_et, sem_et, _ = compute_ensemble_tamsd(
+                    trajectories,
+                    max_lag_fraction=frac,
+                    global_dt=global_dt,
+                    drift_corrected=True,
+                )
+                if tau_et.size >= 4:
+                    fit_ao_et = fit_msd_anomalous_offset(
+                        tau_et, msd_et, tau_et.size, global_dt,
+                        fit_fraction=1.0,
+                        msd_sigma=sem_et,
+                    )
+                    residuals_et = fit_ao_et.msd_fit - fit_ao_et.msd_predicted
+                    metrics_et = _residual_metrics(fit_ao_et.tau_fit, residuals_et)
+
+                    rows.append({
+                        "file": stem,
+                        "group": group_suffix,
+                        "estimator": "<taMSD>",
+                        "model": "anomalous_offset",
+                        "fraction": frac,
+                        "D_alpha": fit_ao_et.D_alpha,
+                        "alpha": fit_ao_et.alpha,
+                        "offset": fit_ao_et.offset,
+                        **metrics_et,
+                    })
+
+                    _save_residual_plot(
+                        fit_ao_et.tau_fit,
+                        residuals_et,
+                        RESIDUALS_DIR / f"{stem}_ens_tamsd_anomalous_offset_residuals_{tag}.svg",
+                        msd_kind="taMSD",
+                    )
+
+                    print(
+                        f"{stem} | <taMSD> | {pct}% | "
+                        f"mean_res={metrics_et['mean_residual']:.3e}, "
+                        f"rmse={metrics_et['rmse']:.3e}, "
+                        f"slope={metrics_et['slope_residual_vs_tau']:.3e}, "
+                        f"p_slope={metrics_et['slope_p_value']:.3e}, "
+                        f"mean_bias={metrics_et['mean_bias_flag']}, "
+                        f"trend_bias={metrics_et['trend_bias_flag']}"
+                    )
+            except (ValueError, RuntimeError) as e:
+                print(f"{stem} | <taMSD> | {pct}% | residual FAILED -- {e}")
+
+    df_res = pd.DataFrame(rows)
+    if df_res.empty:
+        print("No anomalous residual diagnostics were produced.")
+        return df_res
+
+    sfx = f"_{group_suffix}" if group_suffix else ""
+    residual_csv = DOC_DIR / f"diffusion_statistics_anomalous_offset_residuals{sfx}.csv"
+    df_res.to_csv(residual_csv, index=False, float_format="%.6e")
+    print(f"Residual diagnostics CSV saved to {residual_csv}")
+
+    print(f"\n{'-'*100}")
+    print("Residual-bias flags summary")
+    for estimator in ("eaMSD", "<taMSD>"):
+        sub = df_res[df_res["estimator"] == estimator]
+        if sub.empty:
+            continue
+        n = len(sub)
+        n_mean = int(sub["mean_bias_flag"].sum())
+        n_trend = int(sub["trend_bias_flag"].sum())
+        print(
+            f"{estimator:>8}: mean-bias flags = {n_mean}/{n}, "
+            f"trend-bias flags = {n_trend}/{n}"
+        )
+    print(f"{'='*100}")
+
+    return df_res
+
+
 # ── Full analysis for a group ─────────────────────────────────────────
 
 def analyze_group(group_name, csv_files, group_suffix=""):
@@ -552,6 +786,9 @@ def analyze_group(group_name, csv_files, group_suffix=""):
 
     # Phase C2: per-file ⟨taMSD⟩
     df_ens_tamsd = extract_ensemble_tamsd_D(csv_files)
+
+    # Phase C3: residual diagnostics for anomalous+offset fits
+    analyze_anomalous_offset_residuals(csv_files, group_suffix=group_suffix)
 
     # Phase D+E: histograms, statistics
     summary_rows = []
@@ -772,7 +1009,7 @@ def main():
     args = parse_args()
 
     # Create output dirs
-    for d in (STATS_DIR, LINEAR_OFFSET_DIR, DOC_DIR):
+    for d in (STATS_DIR, LINEAR_OFFSET_DIR, RESIDUALS_DIR, DOC_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     groups = group_csv_files(DATA_DIR)
