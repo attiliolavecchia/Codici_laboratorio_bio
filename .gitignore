@@ -35,6 +35,7 @@
 !/Confocale/diffusion_statistics.py
 !/Confocale/diffusion_statistics_anomalous.py
 !/Confocale/eamsd_vs_tamsd_test.py
+!/Confocale/van_hove_analysis.py
 
 
 
