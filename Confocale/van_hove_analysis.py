@@ -53,7 +53,7 @@ N_BINS = 90
 
 
 def _apply_clean_axes_style(ax):
-    ax.set_facecolor("#f7f9fc")
+    ax.set_facecolor("white")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_color("#4b5563")
@@ -324,13 +324,20 @@ def run_group(group_name: str, csv_files, drift_corrected: bool):
             "dx": dx,
         }
 
-    summary_rows = [rows_by_lag[lag] for lag in lag_steps if lag in rows_by_lag]
+    summary_rows = []
+    for lag in lag_steps:
+        if lag not in rows_by_lag:
+            continue
+        row = dict(rows_by_lag[lag])
+        row.pop("dx", None)
+        summary_rows.append(row)
+
     beta_rows = [rows_by_lag[lag] for lag in beta_lag_steps if lag in rows_by_lag]
     plot_items = [
         {
             "lag_steps": int(row["lag_steps"]),
             "tau_s": float(row["tau_s"]),
-            "dx": row["dx"],
+            "dx": rows_by_lag[int(row["lag_steps"])]["dx"],
             "beta_2D": float(row["beta_2D"]),
         }
         for row in summary_rows
@@ -369,7 +376,7 @@ def main():
     args = parser.parse_args()
 
     #drift_corrected = not args.no_drift_correction
-    drift_corrected = True # Force drift correction for better results, as per user request.
+    drift_corrected = False # Force drift correction for better results, as per user request.
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     DOC_DIR.mkdir(parents=True, exist_ok=True)

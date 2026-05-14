@@ -39,7 +39,8 @@
 
 
 
-!/2_Fotoni/flim_data_reader.py
+#!/2_Fotoni/flim_data_reader.py
 !/2_Fotoni/flim_exponential_fit.py
 !/2_Fotoni/plot_power_intensity.py
-!/2_Fotoni/run_all_flim.sh
+!/2_Fotoni/flim_tiff_fit.py
+#!/2_Fotoni/run_all_flim.sh
