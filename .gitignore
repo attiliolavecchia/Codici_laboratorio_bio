@@ -44,3 +44,4 @@
 !/2_Fotoni/plot_power_intensity.py
 !/2_Fotoni/flim_tiff_fit.py
 #!/2_Fotoni/run_all_flim.sh
+!/2_Fotoni/flim_lifetime_map.py

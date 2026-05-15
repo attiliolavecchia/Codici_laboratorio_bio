@@ -456,10 +456,14 @@ def fit_bi_exponential(
     _counts = counts if counts is not None else intensity
     sigma = np.sqrt(np.maximum(_counts, 1.0))
 
-    # Set bounds to ensure positive parameters
+    # Set bounds to keep parameters within physically meaningful ranges.
+    # τ ∈ [0.05, 12] ns: lower bound avoids sub-resolution artefacts;
+    # upper bound is the laser period (80 MHz → 12.5 ns).
+    # Without tight bounds the optimizer often finds degenerate solutions
+    # (e.g. τ₁ ≈ 0 or τ ≫ 12 ns) that are then rejected as non-physical.
     bounds = (
-        [0, 0.001, 0, 0.001],  # Lower bounds
-        [np.inf, np.inf, np.inf, np.inf]  # Upper bounds
+        [0, 0.05, 0, 0.05],           # A ≥ 0, τ ≥ 0.05 ns
+        [np.inf, 12.0, np.inf, 12.0]  # A unlimited, τ ≤ 12 ns
     )
 
     # Perform fitting - use 'trf' method with bounds for stability

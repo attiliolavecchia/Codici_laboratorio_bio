@@ -261,6 +261,8 @@ def _build_mask(
         mask = remove_small_objects(mask, max_size=int(min_object_size) - 1)
         if dilate:
             mask = sk_dilation(mask, disk(1))
+        # Fill enclosed holes (e.g. nucleus darker than Otsu threshold).
+        mask = ndi.binary_fill_holes(mask)
 
     return mask.astype(bool), thr
 
