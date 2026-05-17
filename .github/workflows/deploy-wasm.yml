@@ -3,10 +3,6 @@ name: Deploy marimo WASM to GitHub Pages
 on:
   push:
     branches: [main]
-    paths:
-      - "Confocale/dist/**"
-      - "2_Fotoni/andi_demo.py"
-      - ".github/workflows/deploy-wasm.yml"
   workflow_dispatch:
 
 permissions:
