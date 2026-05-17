@@ -4,18 +4,16 @@
 # But keep this .gitignore file
 !.gitignore
 
-# Keep GitHub Actions workflows
-!.github/
-!.github/workflows/
-!.github/workflows/deploy-wasm.yml
 
 # Keep the Confocale and the 2_Fotoni folders so we can selectively include files inside them
 !/Confocale/
 !/2_Fotoni/
+!/.github/
 
 # Inside Confocale and 2_Fotoni, ignore everything by default
 /Confocale/*
 /2_Fotoni/*
+/.github/*
 
 # Allow only these Python files in Confocale
 #!/Confocale/tamsd_plot.py
@@ -42,11 +40,10 @@
 !/Confocale/eamsd_vs_tamsd_test.py
 !/Confocale/van_hove_analysis.py
 !/Confocale/dist
+!/Confocale/dist/**
 !/Confocale/andi_demo.py
 !/Confocale/andi_sim.ipynb
 !/Confocale/run.py
-
-
 
 
 #!/2_Fotoni/flim_data_reader.py
@@ -56,3 +53,7 @@
 #!/2_Fotoni/run_all_flim.sh
 !/2_Fotoni/flim_lifetime_map.py
 
+# Keep GitHub Actions workflows
+!/.github/
+!/.github/workflows/
+!/.github/workflows/deploy-wasm.yml

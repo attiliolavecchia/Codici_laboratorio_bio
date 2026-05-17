@@ -8,14 +8,7 @@ app = marimo.App(width="full")
 def _():
     import marimo as mo
     import numpy as np
-    try:
-        import plotly.graph_objects as go
-        plotly_available = True
-        plotly_import_error = ""
-    except Exception as exc:
-        go = None
-        plotly_available = False
-        plotly_import_error = str(exc)
+    import plotly.graph_objects as go
     try:
         from andi_datasets.analysis import msd_analysis
         from andi_datasets.datasets_theory import datasets_theory
@@ -37,8 +30,6 @@ def _():
         mo,
         models_phenom,
         msd_analysis,
-        plotly_available,
-        plotly_import_error,
         np,
     )
 
@@ -76,7 +67,7 @@ def _(mo):
             "Confinement": "confinement",
             "Immobile Traps": "traps",
         },
-        value="bm",
+        value="Brownian Motion",   # must match a KEY of the dict
         label="Diffusion model",
         full_width=True,
     )
@@ -133,7 +124,6 @@ def _(
     andi_available, andi_import_error,
     box_size, current_frame, d_conf, d_free, d_scale,
     d_trap, max_lag_frac, model, mo, n_comp, n_frames, n_traj,
-    plotly_available, plotly_import_error,
     r_comp, trans, trap_r, trap_nt, trap_pu, trap_pb,
 ):
     _info = {
@@ -194,23 +184,6 @@ def _(
                         "Per questo modello, in modalità fallback viene usata un'approssimazione "
                         "Browniana confinata nel box."
                     ),
-                    kind="neutral",
-                )
-            )
-
-    if not plotly_available:
-        _runtime_notes.append(
-            mo.callout(
-                mo.md(
-                    "**Plotly non disponibile nel runtime web**: i grafici interattivi sono disattivati."
-                ),
-                kind="warn",
-            )
-        )
-        if plotly_import_error:
-            _runtime_notes.append(
-                mo.callout(
-                    mo.md(f"Dettaglio import Plotly: `{plotly_import_error}`"),
                     kind="neutral",
                 )
             )
@@ -387,83 +360,75 @@ def _(
     L, N, T,
     alpha_ea, alpha_ta, alpha_ta_std,
     comp_centers, comp_radius, is_bounded,
-    plotly_available,
     current_frame, go, model, mo, np, traj_nt2,
 ):
-    if not plotly_available or go is None:
-        _out = mo.callout(
-            mo.md("Grafico traiettorie non disponibile in questa build web (Plotly mancante)."),
-            kind="warn",
-        )
-    else:
-        _frame = min(int(current_frame.value), T)
-        _slice = traj_nt2[:, :_frame, :]   # N × frame × 2
+    _frame = min(int(current_frame.value), T)
+    _slice = traj_nt2[:, :_frame, :]   # N × frame × 2
 
-        _fig = go.Figure()
-        _palette = [f"hsl({int(360 * _i / max(N, 1))},70%,50%)" for _i in range(N)]
+    _fig = go.Figure()
+    _palette = [f"hsl({int(360 * _i / max(N, 1))},70%,50%)" for _i in range(N)]
 
-        for _i in range(N):
-            _xs, _ys = _slice[_i, :, 0], _slice[_i, :, 1]
-            _fig.add_trace(go.Scatter(
-                x=_xs, y=_ys, mode="lines",
-                line={"width": 1.6, "color": _palette[_i]},
+    for _i in range(N):
+        _xs, _ys = _slice[_i, :, 0], _slice[_i, :, 1]
+        _fig.add_trace(go.Scatter(
+            x=_xs, y=_ys, mode="lines",
+            line={"width": 1.6, "color": _palette[_i]},
+            showlegend=False,
+        ))
+        if len(_xs) > 0:
+            _fig.add_trace(go.Scatter(   # start dot
+                x=[_xs[0]], y=[_ys[0]], mode="markers",
+                marker={"symbol": "circle", "size": 6, "color": _palette[_i]},
                 showlegend=False,
             ))
-            if len(_xs) > 0:
-                _fig.add_trace(go.Scatter(   # start dot
-                    x=[_xs[0]], y=[_ys[0]], mode="markers",
-                    marker={"symbol": "circle", "size": 6, "color": _palette[_i]},
-                    showlegend=False,
-                ))
-                _fig.add_trace(go.Scatter(   # current position dot
-                    x=[_xs[-1]], y=[_ys[-1]], mode="markers",
-                    marker={"symbol": "circle", "size": 9, "color": _palette[_i],
-                            "line": {"color": "black", "width": 1}},
-                    showlegend=False,
-                ))
+            _fig.add_trace(go.Scatter(   # current position dot
+                x=[_xs[-1]], y=[_ys[-1]], mode="markers",
+                marker={"symbol": "circle", "size": 9, "color": _palette[_i],
+                        "line": {"color": "black", "width": 1}},
+                showlegend=False,
+            ))
 
-        if model.value == "confinement" and comp_centers is not None:
-            for _cx, _cy in comp_centers:
-                _fig.add_shape(
-                    type="circle", xref="x", yref="y",
-                    x0=float(_cx - comp_radius), y0=float(_cy - comp_radius),
-                    x1=float(_cx + comp_radius), y1=float(_cy + comp_radius),
-                    line={"color": "rgba(25,85,160,0.3)", "width": 1},
-                )
-            _xr, _yr = [0, L], [0, L]
-        elif is_bounded:
-            _xr, _yr = [0, L], [0, L]
-        else:
-            _xmin = float(np.min(traj_nt2[:, :, 0]))
-            _xmax = float(np.max(traj_nt2[:, :, 0]))
-            _ymin = float(np.min(traj_nt2[:, :, 1]))
-            _ymax = float(np.max(traj_nt2[:, :, 1]))
-            _px = 0.05 * max(1.0, _xmax - _xmin)
-            _py = 0.05 * max(1.0, _ymax - _ymin)
-            _xr = [_xmin - _px, _xmax + _px]
-            _yr = [_ymin - _py, _ymax + _py]
+    if model.value == "confinement" and comp_centers is not None:
+        for _cx, _cy in comp_centers:
+            _fig.add_shape(
+                type="circle", xref="x", yref="y",
+                x0=float(_cx - comp_radius), y0=float(_cy - comp_radius),
+                x1=float(_cx + comp_radius), y1=float(_cy + comp_radius),
+                line={"color": "rgba(25,85,160,0.3)", "width": 1},
+            )
+        _xr, _yr = [0, L], [0, L]
+    elif is_bounded:
+        _xr, _yr = [0, L], [0, L]
+    else:
+        _xmin = float(np.min(traj_nt2[:, :, 0]))
+        _xmax = float(np.max(traj_nt2[:, :, 0]))
+        _ymin = float(np.min(traj_nt2[:, :, 1]))
+        _ymax = float(np.max(traj_nt2[:, :, 1]))
+        _px = 0.05 * max(1.0, _xmax - _xmin)
+        _py = 0.05 * max(1.0, _ymax - _ymin)
+        _xr = [_xmin - _px, _xmax + _px]
+        _yr = [_ymin - _py, _ymax + _py]
 
-        _fig.update_layout(
-            title=f"{model.value.upper()} | frame {_frame}/{T}",
-            xaxis_title="x (px)", yaxis_title="y (px)",
-            template="plotly_white", height=520,
-            margin={"l": 40, "r": 10, "t": 50, "b": 40},
-        )
-        _fig.update_xaxes(range=_xr)
-        _fig.update_yaxes(range=_yr, scaleanchor="x", scaleratio=1)
+    _fig.update_layout(
+        title=f"{model.value.upper()} | frame {_frame}/{T}",
+        xaxis_title="x (px)", yaxis_title="y (px)",
+        template="plotly_white", height=520,
+        margin={"l": 40, "r": 10, "t": 50, "b": 40},
+    )
+    _fig.update_xaxes(range=_xr)
+    _fig.update_yaxes(range=_yr, scaleanchor="x", scaleratio=1)
 
-        _out = mo.vstack([
-            mo.callout(
-                mo.md(
-                    f"**α (taMSD, mean ± std)** = {alpha_ta:.3f} ± {alpha_ta_std:.3f}"
-                    f" &emsp;|&emsp; **α (eaMSD)** = {alpha_ea:.3f}"
-                    f" &emsp;|&emsp; frame **{_frame}** / {T}"
-                ),
-                kind="success" if alpha_ta > 0.9 else "warn" if alpha_ta < 0.6 else "info",
+    mo.vstack([
+        mo.callout(
+            mo.md(
+                f"**α (taMSD, mean ± std)** = {alpha_ta:.3f} ± {alpha_ta_std:.3f}"
+                f" &emsp;|&emsp; **α (eaMSD)** = {alpha_ea:.3f}"
+                f" &emsp;|&emsp; frame **{_frame}** / {T}"
             ),
-            _fig,
-        ])
-    _out
+            kind="success" if alpha_ta > 0.9 else "warn" if alpha_ta < 0.6 else "info",
+        ),
+        _fig,
+    ])
     return
 
 
@@ -472,72 +437,64 @@ def _(
 def _(
     alpha_ea, alpha_ta, alpha_ta_std,
     eamsd, eb,
-    plotly_available,
     go, model, mo, t_lags, tamsd, tamsd_mean,
 ):
-    if not plotly_available or go is None:
-        _out = mo.callout(
-            mo.md("Grafici MSD/EB non disponibili in questa build web (Plotly mancante)."),
-            kind="warn",
-        )
-    else:
-        # ── Figure 1: taMSD & eaMSD ──────────────────────────────────────────────
-        _fig_msd = go.Figure()
+    # ── Figure 1: taMSD & eaMSD ──────────────────────────────────────────────
+    _fig_msd = go.Figure()
 
-        for _i in range(min(tamsd.shape[1], 20)):
-            _fig_msd.add_trace(go.Scatter(
-                x=t_lags, y=tamsd[:, _i], mode="lines",
-                line={"color": "rgba(150,150,220,0.18)", "width": 1},
-                showlegend=False,
-            ))
-
+    for _i in range(min(tamsd.shape[1], 20)):
         _fig_msd.add_trace(go.Scatter(
-            x=t_lags, y=tamsd_mean, mode="lines",
-            name=f"taMSD   α = {alpha_ta:.2f} ± {alpha_ta_std:.2f}",
-            line={"color": "royalblue", "width": 3},
-        ))
-        _fig_msd.add_trace(go.Scatter(
-            x=t_lags, y=eamsd, mode="lines",
-            name=f"eaMSD  α = {alpha_ea:.2f}",
-            line={"color": "tomato", "width": 3},
+            x=t_lags, y=tamsd[:, _i], mode="lines",
+            line={"color": "rgba(150,150,220,0.18)", "width": 1},
+            showlegend=False,
         ))
 
-        _fig_msd.update_xaxes(type="log", title_text="Lag Δ (frames)")
-        _fig_msd.update_yaxes(type="log", title_text="MSD")
-        _fig_msd.update_layout(
-            title=f"taMSD & eaMSD — {model.value.upper()}",
-            template="plotly_white", height=400,
-            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
-            margin={"l": 55, "r": 20, "t": 60, "b": 45},
-        )
+    _fig_msd.add_trace(go.Scatter(
+        x=t_lags, y=tamsd_mean, mode="lines",
+        name=f"taMSD   α = {alpha_ta:.2f} ± {alpha_ta_std:.2f}",
+        line={"color": "royalblue", "width": 3},
+    ))
+    _fig_msd.add_trace(go.Scatter(
+        x=t_lags, y=eamsd, mode="lines",
+        name=f"eaMSD  α = {alpha_ea:.2f}",
+        line={"color": "tomato", "width": 3},
+    ))
 
-        # ── Figure 2: Ergodicity Breaking ─────────────────────────────────────────
-        _fig_eb = go.Figure()
+    _fig_msd.update_xaxes(type="log", title_text="Lag Δ (frames)")
+    _fig_msd.update_yaxes(type="log", title_text="MSD")
+    _fig_msd.update_layout(
+        title=f"taMSD & eaMSD — {model.value.upper()}",
+        template="plotly_white", height=400,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+        margin={"l": 55, "r": 20, "t": 60, "b": 45},
+    )
 
-        _fig_eb.add_trace(go.Scatter(
-            x=t_lags, y=eb, mode="lines",
-            name="EB(Δ)",
-            line={"color": "seagreen", "width": 2.5},
-        ))
-        _fig_eb.add_hline(y=0.0, line_color="silver", line_width=1)
-        _eb_bm = 2.0 / (3.0 * tamsd.shape[1])
-        _fig_eb.add_hline(
-            y=_eb_bm, line_color="sandybrown", line_width=1.5, line_dash="dot",
-            annotation_text=f"BM limit = {_eb_bm:.3f}",
-            annotation_position="bottom right",
-        )
+    # ── Figure 2: Ergodicity Breaking ─────────────────────────────────────────
+    _fig_eb = go.Figure()
 
-        _fig_eb.update_xaxes(type="log", title_text="Lag Δ (frames)")
-        _fig_eb.update_yaxes(title_text="EB(Δ)")
-        _fig_eb.update_layout(
-            title="Ergodicity Breaking  EB(Δ) = ⟨δ̄²²⟩/⟨δ̄²⟩² − 1",
-            template="plotly_white", height=340,
-            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
-            margin={"l": 55, "r": 130, "t": 55, "b": 45},
-        )
+    _fig_eb.add_trace(go.Scatter(
+        x=t_lags, y=eb, mode="lines",
+        name="EB(Δ)",
+        line={"color": "seagreen", "width": 2.5},
+    ))
+    _fig_eb.add_hline(y=0.0, line_color="silver", line_width=1)
+    _eb_bm = 2.0 / (3.0 * tamsd.shape[1])
+    _fig_eb.add_hline(
+        y=_eb_bm, line_color="sandybrown", line_width=1.5, line_dash="dot",
+        annotation_text=f"BM limit = {_eb_bm:.3f}",
+        annotation_position="bottom right",
+    )
 
-        _out = mo.vstack([_fig_msd, _fig_eb])
-    _out
+    _fig_eb.update_xaxes(type="log", title_text="Lag Δ (frames)")
+    _fig_eb.update_yaxes(title_text="EB(Δ)")
+    _fig_eb.update_layout(
+        title="Ergodicity Breaking  EB(Δ) = ⟨δ̄²²⟩/⟨δ̄²⟩² − 1",
+        template="plotly_white", height=340,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+        margin={"l": 55, "r": 130, "t": 55, "b": 45},
+    )
+
+    mo.vstack([_fig_msd, _fig_eb])
     return
 
 
