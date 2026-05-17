@@ -9,11 +9,29 @@ def _():
     import marimo as mo
     import numpy as np
     import plotly.graph_objects as go
-    from andi_datasets.analysis import msd_analysis
-    from andi_datasets.datasets_theory import datasets_theory
-    from andi_datasets.models_phenom import models_phenom
+    try:
+        from andi_datasets.analysis import msd_analysis
+        from andi_datasets.datasets_theory import datasets_theory
+        from andi_datasets.models_phenom import models_phenom
+        andi_available = True
+        andi_import_error = ""
+    except Exception as exc:
+        datasets_theory = None
+        models_phenom = None
+        msd_analysis = None
+        andi_available = False
+        andi_import_error = str(exc)
 
-    return datasets_theory, go, mo, models_phenom, msd_analysis, np
+    return (
+        andi_available,
+        andi_import_error,
+        datasets_theory,
+        go,
+        mo,
+        models_phenom,
+        msd_analysis,
+        np,
+    )
 
 
 @app.cell
@@ -103,6 +121,7 @@ def _(mo):
 @app.cell
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
+    andi_available, andi_import_error,
     box_size, current_frame, d_conf, d_free, d_scale,
     d_trap, max_lag_frac, model, mo, n_comp, n_frames, n_traj,
     r_comp, trans, trap_r, trap_nt, trap_pu, trap_pb,
@@ -147,12 +166,42 @@ def _(
     else:  # traps
         _specific = mo.vstack([trap_r, trap_nt, trap_pu, trap_pb, d_trap], gap=0.3)
 
+    _runtime_notes = []
+    if not andi_available:
+        _runtime_notes.append(
+            mo.callout(
+                mo.md(
+                    "**WASM fallback attivo**: `andi_datasets` non disponibile nel browser. "
+                    "La demo usa una simulazione numerica equivalente in NumPy."
+                ),
+                kind="warn",
+            )
+        )
+        if model.value in {"confinement", "traps"}:
+            _runtime_notes.append(
+                mo.callout(
+                    mo.md(
+                        "Per questo modello, in modalità fallback viene usata un'approssimazione "
+                        "Browniana confinata nel box."
+                    ),
+                    kind="neutral",
+                )
+            )
+        if andi_import_error:
+            _runtime_notes.append(
+                mo.callout(
+                    mo.md(f"Dettaglio import: `{andi_import_error}`"),
+                    kind="neutral",
+                )
+            )
+
     mo.hstack([
         # Left column: all controls
         mo.vstack([
             mo.md("### 🔬 Model"),
             model,
             _info[model.value],
+            *_runtime_notes,
             mo.md("##### Common"),
             n_traj, n_frames, box_size, max_lag_frac,
             mo.md("##### Model parameters"),
@@ -169,6 +218,7 @@ def _(
 @app.cell
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
+    andi_available,
     box_size, d_conf, d_free, d_scale, d_trap, datasets_theory,
     max_lag_frac, model, models_phenom, msd_analysis,
     n_comp, n_frames, n_traj, np, r_comp, trans,
@@ -181,7 +231,32 @@ def _(
     comp_radius  = None
     is_bounded   = False   # True for models confined in [0, L]
 
-    if model.value == "confinement":
+    def _simulate_fallback(_name, _n, _t, _alpha, _scale, _box):
+        _steps = np.random.normal(0.0, 1.0, size=(_n, _t, 2))
+        _traj = np.cumsum(_steps, axis=1)
+
+        _tt = np.arange(1, _t + 1, dtype=float)
+        _pow = np.power(_tt, (_alpha - 1.0) / 2.0)
+        _traj = _traj * _pow[None, :, None] * np.sqrt(max(_scale, 1e-12))
+
+        if _name == "ctrw":
+            _move_prob = min(1.0, max(0.05, _alpha))
+            _moves = (np.random.random(size=(_n, _t, 1)) < _move_prob).astype(float)
+            _traj = np.cumsum(_steps * _moves, axis=1) * np.sqrt(max(_scale, 1e-12))
+        elif _name == "lw":
+            _bursts = (np.random.random(size=(_n, _t, 1)) < 0.03).astype(float)
+            _traj = np.cumsum(_steps * (1.0 + 6.0 * _bursts), axis=1) * np.sqrt(max(_scale, 1e-12))
+
+        _bounded = _name in {"confinement", "traps"}
+        if _bounded:
+            _traj = _traj - np.min(_traj, axis=(1, 2), keepdims=True)
+            _maxv = np.max(_traj, axis=(1, 2), keepdims=True)
+            _maxv = np.maximum(_maxv, 1e-9)
+            _traj = (_traj / _maxv) * float(_box)
+
+        return _traj, _bounded
+
+    if andi_available and model.value == "confinement":
         is_bounded = True
         comp_radius = int(r_comp.value)
         comp_centers = models_phenom._distribute_circular_compartments(
@@ -196,7 +271,7 @@ def _(
             trans=float(trans.value),
         )
         traj_nt2 = _traj_tn2.transpose(1, 0, 2)
-    elif model.value == "traps":
+    elif andi_available and model.value == "traps":
         is_bounded = True
         _traj_tn2, _labels = models_phenom().immobile_traps(
             N=N, T=T, L=L,
@@ -208,7 +283,7 @@ def _(
             Nt=int(trap_nt.value),
         )
         traj_nt2 = np.array(_traj_tn2).transpose(1, 0, 2)
-    else:
+    elif andi_available:
         # BM: FBM with alpha=1 (model idx 2); FBM, LW, CTRW: theory models
         _model_idx = {"bm": 2, "fbm": 2, "ctrw": 1, "lw": 3}[model.value]
         _alpha = 1.0 if model.value == "bm" else \
@@ -221,13 +296,34 @@ def _(
         _x = _ds[:, 2 : 2 + T]
         _y = _ds[:, 2 + T : 2 + 2 * T]
         traj_nt2 = np.stack([_x, _y], axis=-1) * np.sqrt(float(d_scale.value))
+    else:
+        _alpha = 1.0 if model.value == "bm" else \
+                 float(alpha_fbm.value) if model.value == "fbm" else \
+                 float(alpha_ctrw.value) if model.value == "ctrw" else \
+                 float(alpha_lw.value) if model.value == "lw" else 1.0
+        _scale = float(d_scale.value if model.value != "traps" else d_trap.value)
+        traj_nt2, is_bounded = _simulate_fallback(model.value, N, T, _alpha, _scale, L)
 
     # MSD analysis
     _max_lag = max(10, int(T * float(max_lag_frac.value)))
     t_lags = np.arange(1, _max_lag + 1)
-    _ana = msd_analysis()
+    if andi_available:
+        _ana = msd_analysis()
+        tamsd = _ana.tamsd(traj_nt2, t_lags, dim=2)   # shape (n_lags, N)
+        _per_alpha = _ana.get_exponent(traj_nt2, t_lags=t_lags.tolist())
+    else:
+        tamsd = np.empty((len(t_lags), N), dtype=float)
+        for _j, _lag in enumerate(t_lags):
+            _disp = traj_nt2[:, _lag:, :] - traj_nt2[:, :-_lag, :]
+            tamsd[_j, :] = np.nanmean(np.sum(_disp * _disp, axis=2), axis=1)
 
-    tamsd      = _ana.tamsd(traj_nt2, t_lags, dim=2)   # shape (n_lags, N)
+        _log_t = np.log(t_lags)
+        _per_alpha = np.full(N, np.nan, dtype=float)
+        for _i in range(N):
+            _mask = np.isfinite(tamsd[:, _i]) & (tamsd[:, _i] > 0)
+            if np.count_nonzero(_mask) >= 3:
+                _per_alpha[_i] = float(np.polyfit(_log_t[_mask], np.log(tamsd[_mask, _i]), 1)[0])
+
     tamsd_mean = np.nanmean(tamsd, axis=1)
 
     eamsd = np.array([
@@ -235,8 +331,7 @@ def _(
         for k in t_lags
     ])
 
-    # Native per-trajectory alpha from library
-    _per_alpha  = _ana.get_exponent(traj_nt2, t_lags=t_lags.tolist())
+    # Per-trajectory alpha
     alpha_ta     = float(np.nanmean(_per_alpha))
     alpha_ta_std = float(np.nanstd(_per_alpha))
 
