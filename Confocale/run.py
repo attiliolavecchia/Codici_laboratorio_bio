@@ -13,29 +13,7 @@ def main() -> int:
         print(f"Cannot find app file: {app_file}")
         return 1
 
-    # --wasm  → export as self-contained HTML for GitHub Pages
-    if "--wasm" in sys.argv:
-        out_dir = this_dir / "dist"
-        out_dir.mkdir(exist_ok=True)
-        cmd = [
-            sys.executable, "-m", "marimo", "export", "html-wasm",
-            str(app_file),
-            "-o", str(out_dir),
-            "--mode", "run",
-            "--no-show-code",
-            "-f",  # overwrite if exists
-        ]
-        print("Exporting WASM → ", out_dir)
-        print("Run:", " ".join(cmd))
-        rc = subprocess.call(cmd, cwd=str(this_dir))
-        if rc == 0:
-            html = out_dir / "index.html"
-            print(f"\n✓ Done!  Open  {html}\n  or deploy the '{out_dir.name}/' folder to GitHub Pages.")
-        return rc
-
-    mode = "run"
-    if "--edit" in sys.argv:
-        mode = "edit"
+    mode = "edit" if "--edit" in sys.argv else "run"
 
     cmd = [sys.executable, "-m", "marimo", mode, str(app_file)]
     print("Launching:", " ".join(cmd))

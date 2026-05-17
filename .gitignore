@@ -8,12 +8,12 @@
 # Keep the Confocale and the 2_Fotoni folders so we can selectively include files inside them
 !/Confocale/
 !/2_Fotoni/
-!/.github/
+#!/.github/
 
 # Inside Confocale and 2_Fotoni, ignore everything by default
 /Confocale/*
 /2_Fotoni/*
-/.github/*
+#/.github/*
 
 # Allow only these Python files in Confocale
 #!/Confocale/tamsd_plot.py
@@ -54,6 +54,6 @@
 !/2_Fotoni/flim_lifetime_map.py
 
 # Keep GitHub Actions workflows
-!/.github/
-!/.github/workflows/
-!/.github/workflows/deploy-wasm.yml
+#!/.github/
+#!/.github/workflows/
+#!/.github/workflows/deploy-wasm.yml
