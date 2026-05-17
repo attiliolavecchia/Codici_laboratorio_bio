@@ -106,7 +106,7 @@ def _(mo):
     frame_tick = mo.ui.refresh(
         options=["0.15s", "0.2s", "0.5s", "1s"],
         default_interval="0.2s",
-        label="",
+        label="Playback speed",
     )
     return frame_tick, is_playing
 
@@ -209,7 +209,7 @@ def _(
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
     box_size, d_conf, d_free, d_scale, d_trap, datasets_theory,
-    max_lag_frac, model, models_phenom, msd_analysis,
+    model, models_phenom,
     n_comp, n_frames, n_traj, np, r_comp, trans,
     trap_r, trap_nt, trap_pu, trap_pb,
 ):
@@ -261,23 +261,37 @@ def _(
         _y = _ds[:, 2 + T : 2 + 2 * T]
         traj_nt2 = np.stack([_x, _y], axis=-1) * np.sqrt(float(d_scale.value))
 
-    # MSD analysis
-    _max_lag = max(10, int(T * float(max_lag_frac.value)))
+    return (
+        L, N, T,
+        comp_centers, comp_radius, is_bounded,
+        traj_nt2,
+    )
+
+
+# ── MSD COMPUTATION (re-runs on every frame advance) ─────────────────────────
+@app.cell
+def _(T, get_frame, max_lag_frac, msd_analysis, np, traj_nt2):
+    # Compute MSD only up to the current frame so the plot evolves in real time.
+    _frame = max(4, min(int(get_frame()), T))
+    _traj = traj_nt2[:, :_frame, :]
+    # max_lag must be at least 2 and at most _frame-1 (valid index range)
+    _max_lag = max(2, min(int(_frame * float(max_lag_frac.value)), _frame - 1))
     t_lags = np.arange(1, _max_lag + 1)
+
     _ana = msd_analysis()
-    tamsd = _ana.tamsd(traj_nt2, t_lags, dim=2)   # shape (n_lags, N)
-    _per_alpha = _ana.get_exponent(traj_nt2, t_lags=t_lags.tolist())
+    tamsd = _ana.tamsd(_traj, t_lags, dim=2)   # shape (n_lags, N)
+    _per_alpha = _ana.get_exponent(_traj, t_lags=t_lags.tolist())
 
     tamsd_mean = np.nanmean(tamsd, axis=1)
 
     eamsd = np.array([
-        ((traj_nt2[:, k, :] - traj_nt2[:, 0, :]) ** 2).sum(axis=1).mean()
+        ((_traj[:, k, :] - _traj[:, 0, :]) ** 2).sum(axis=1).mean()
         for k in t_lags
     ])
 
     # Per-trajectory alpha
-    alpha_ta     = float(np.nanmean(_per_alpha))
-    alpha_ta_std = float(np.nanstd(_per_alpha))
+    alpha_ta     = float(np.nanmean(np.asarray(_per_alpha).ravel()))
+    alpha_ta_std = float(np.nanstd(np.asarray(_per_alpha).ravel()))
 
     # eaMSD alpha via polyfit on log-log
     _mask_ea = np.isfinite(eamsd) & (eamsd > 0)
@@ -290,12 +304,8 @@ def _(
     # eb = np.nanmean(tamsd ** 2, axis=1) / (np.nanmean(tamsd, axis=1) ** 2) - 1.0
 
     return (
-        L, N, T,
         alpha_ea, alpha_ta, alpha_ta_std,
-        comp_centers, comp_radius, is_bounded,
-        eamsd,
-        t_lags, tamsd, tamsd_mean,
-        traj_nt2,
+        eamsd, t_lags, tamsd, tamsd_mean,
     )
 
 
@@ -394,8 +404,8 @@ def _(
         line={"color": "tomato", "width": 3},
     ))
 
-    _fig_msd.update_xaxes(type="log", title_text="Lag Δ (frames)")
-    _fig_msd.update_yaxes(type="log", title_text="MSD")
+    _fig_msd.update_xaxes(title_text="Lag Δ (frames)", tickformat="d", nticks=10)
+    _fig_msd.update_yaxes(type="log", title_text="MSD", exponentformat="power", dtick=1)
     _fig_msd.update_layout(
         title=f"taMSD & eaMSD — {model.value.upper()}",
         template="plotly_white", height=400,
