@@ -36,6 +36,11 @@
 !/Confocale/diffusion_statistics_anomalous.py
 !/Confocale/eamsd_vs_tamsd_test.py
 !/Confocale/van_hove_analysis.py
+!/Confocale/dist
+!/Confocale/andi_demo.py
+!/Confocale/andi_sim.ipynb
+!/Confocale/run.py
+
 
 
 
@@ -45,3 +50,4 @@
 !/2_Fotoni/flim_tiff_fit.py
 #!/2_Fotoni/run_all_flim.sh
 !/2_Fotoni/flim_lifetime_map.py
+
