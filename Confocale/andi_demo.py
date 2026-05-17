@@ -115,15 +115,46 @@ def _(mo):
     )
 
 
-# ── FRAME SLIDER — separate cell so scrubbing never re-triggers simulation ───
+# ── FRAME STATE — single source of truth for current frame ──────────────────
 @app.cell
 def _(mo):
-    current_frame = mo.ui.slider(
-        1, 1500, value=50, step=1,
-        label="▶  Current frame",
-        show_value=True, full_width=True,
+    get_frame, set_frame = mo.state(1)
+    return get_frame, set_frame
+
+
+# ── PLAY CONTROLS ────────────────────────────────────────────────────────────
+@app.cell
+def _(mo):
+    is_playing = mo.ui.switch(label="▶ Auto-play", value=False)
+    play_speed = mo.ui.refresh(
+        options=["0.05s", "0.1s", "0.2s", "0.5s", "1s"],
+        default_interval="0.1s",
+        label="",
     )
-    return (current_frame,)
+    return is_playing, play_speed
+
+
+# ── SEEK SLIDER — manual seeking; on_change writes to state ──────────────────
+@app.cell
+def _(mo, set_frame):
+    seek_slider = mo.ui.slider(
+        1, 1500, value=1, step=1,
+        label="⏩ Seek frame",
+        show_value=True, full_width=True,
+        on_change=set_frame,
+    )
+    return (seek_slider,)
+
+
+# ── FRAME ADVANCE — runs on every timer tick; advances frame when playing ─────
+@app.cell
+def _(T, get_frame, is_playing, play_speed, set_frame):
+    if is_playing.value and play_speed.value:
+        _next = get_frame() + 1
+        if _next > T:
+            _next = 1  # wrap around to start
+        set_frame(_next)
+    return
 
 
 # ── DISPLAY ALL CONTROLS ─────────────────────────────────────────────────────
@@ -131,10 +162,10 @@ def _(mo):
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
     andi_available, andi_import_error,
-    box_size, current_frame, d_conf, d_free, d_scale,
-    d_trap, max_lag_frac, model, mo, n_comp, n_frames, n_traj,
-    plotly_available, plotly_import_error,
-    r_comp, trans, trap_r, trap_nt, trap_pu, trap_pb,
+    box_size, d_conf, d_free, d_scale,
+    d_trap, is_playing, max_lag_frac, model, mo, n_comp, n_frames, n_traj,
+    play_speed, plotly_available, plotly_import_error,
+    r_comp, seek_slider, trans, trap_r, trap_nt, trap_pu, trap_pb,
 ):
     _info = {
         "bm": mo.callout(
@@ -235,14 +266,15 @@ def _(
             mo.md("##### Model parameters"),
             _specific,
             mo.md("---"),
-            mo.md("### ⏱ Scrub through time"),
-            current_frame,
+            mo.md("### ⏱ Frame control"),
+            mo.hstack([is_playing, play_speed], gap=0.5),
+            seek_slider,
         ], gap=0.3),
     ], widths=[1])
     return
 
 
-# ── SIMULATION (does NOT depend on current_frame → no re-run when scrubbing) ─
+# ── SIMULATION (does NOT depend on frame state → no re-run when scrubbing) ───
 @app.cell
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
@@ -382,13 +414,13 @@ def _(
     )
 
 
-# ── TRAJECTORY PLOT (fast re-run on frame slider change) ─────────────────────
+# ── TRAJECTORY PLOT (fast re-run when frame state changes) ──────────────────
 @app.cell
 def _(
     L, N, T,
     alpha_ea, alpha_ta, alpha_ta_std,
     comp_centers, comp_radius, is_bounded,
-    current_frame, go, model, mo, np, plotly_available, traj_nt2,
+    get_frame, go, model, mo, np, plotly_available, traj_nt2,
 ):
     if not plotly_available or go is None:
         _out = mo.vstack([
@@ -402,7 +434,7 @@ def _(
             ),
         ])
     else:
-        _frame = min(int(current_frame.value), T)
+        _frame = min(int(get_frame()), T)
         _slice = traj_nt2[:, :_frame, :]   # N × frame × 2
 
         _fig = go.Figure()
