@@ -4,6 +4,11 @@
 # But keep this .gitignore file
 !.gitignore
 
+# Keep GitHub Actions workflows
+!.github/
+!.github/workflows/
+!.github/workflows/deploy-wasm.yml
+
 # Keep the Confocale and the 2_Fotoni folders so we can selectively include files inside them
 !/Confocale/
 !/2_Fotoni/
