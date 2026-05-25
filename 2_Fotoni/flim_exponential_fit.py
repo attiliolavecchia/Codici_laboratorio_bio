@@ -413,6 +413,7 @@ def fit_bi_exponential(
     p0: Optional[Tuple[float, float, float, float]] = None,
     mono_result: Optional[MonoExpFitResult] = None,
     counts: Optional[np.ndarray] = None,
+    tau_max_ns: float = 12.0,
 ) -> BiExpFitResult:
     """
     Fit bi-exponential decay model to FLIM data using Levenberg-Marquardt.
@@ -457,13 +458,12 @@ def fit_bi_exponential(
     sigma = np.sqrt(np.maximum(_counts, 1.0))
 
     # Set bounds to keep parameters within physically meaningful ranges.
-    # τ ∈ [0.05, 12] ns: lower bound avoids sub-resolution artefacts;
-    # upper bound is the laser period (80 MHz → 12.5 ns).
-    # Without tight bounds the optimizer often finds degenerate solutions
-    # (e.g. τ₁ ≈ 0 or τ ≫ 12 ns) that are then rejected as non-physical.
+    # τ ∈ [0.05, tau_max_ns]: lower bound avoids sub-resolution artefacts;
+    # upper bound can be tightened (e.g. 6 ns for DAPI in cells) to prevent
+    # the optimizer from finding degenerate high-τ solutions in low-SNR pixels.
     bounds = (
-        [0, 0.05, 0, 0.05],           # A ≥ 0, τ ≥ 0.05 ns
-        [np.inf, 12.0, np.inf, 12.0]  # A unlimited, τ ≤ 12 ns
+        [0, 0.05, 0, 0.05],
+        [np.inf, tau_max_ns, np.inf, tau_max_ns],
     )
 
     # Perform fitting - use 'trf' method with bounds for stability

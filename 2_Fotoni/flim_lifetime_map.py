@@ -94,14 +94,14 @@ _HERE = Path(__file__).parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from flim_tiff_fit import (  # noqa: E402
+from flim_tiff_fit import ( 
     DEFAULT_LASER_REP_RATE_MHZ,
     _build_mask,
     _remove_hot_pixels_2d,
     _remove_hot_pixels_stack,
     detect_trailing_artifact_cutoff,
 )
-from flim_exponential_fit import (  # noqa: E402
+from flim_exponential_fit import ( 
     fit_bi_exponential,
     fit_mono_exponential,
 )
@@ -227,6 +227,7 @@ def compute_lifetime_maps(
     bin_radius: int = 1,
     min_counts: int = 30,
     fit_biexp: bool = True,
+    tau_max_ns: float = 12.0,
 ) -> Dict[str, np.ndarray]:
     """
     Fit mono- and (optionally) bi-exponential decays for every masked pixel.
@@ -293,13 +294,14 @@ def compute_lifetime_maps(
                     time_fit, trace_fit,
                     mono_result=mono_res,
                     counts=trace_fit,
+                    tau_max_ns=tau_max_ns,
                 )
             t1    = float(bi_res.tau1)
             t2    = float(bi_res.tau2)
             t_avg = float(bi_res.tau_avg)
             # Require both individual τs to be physical (tau_avg then is too)
-            if (_TAU_MIN_NS <= t1 <= _TAU_MAX_NS and
-                    _TAU_MIN_NS <= t2 <= _TAU_MAX_NS):
+            if (_TAU_MIN_NS <= t1 <= tau_max_ns and
+                    _TAU_MIN_NS <= t2 <= tau_max_ns):
                 tau_avg[y, x]  = t_avg
                 tau1_map[y, x] = t1
                 tau2_map[y, x] = t2
@@ -360,10 +362,8 @@ def save_lifetime_plot(
     norm    = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
     cmap_fn = _get_cmap(colormap)
     tau_rgba = cmap_fn(norm(np.nan_to_num(tau_map, nan=vmin)))  # (H, W, 4)
-    # Soft edge: alpha ramps 0→0.65 over the outermost 2 pixels of the mask
-    # so the cell boundary fades rather than cutting sharply.
-    dist = ndi.distance_transform_edt(np.isfinite(tau_map))
-    tau_rgba[:, :, 3] = 0.65 * np.clip(dist / 2.0, 0.0, 1.0)
+    # Hard edge: alpha = 0.85 on valid pixels, 0.0 outside the mask.
+    tau_rgba[:, :, 3] = np.where(np.isfinite(tau_map), 0.85, 0.0)
 
     im = ax.imshow(tau_rgba, interpolation="nearest")
 
@@ -418,12 +418,12 @@ def save_tau_histogram(
                 transform=ax.transAxes)
     else:
         ax.hist(v, bins=40, color=color, alpha=0.75, edgecolor="white", linewidth=0.4)
-        mean, std = stats["mean"], stats["std"]
-        ax.axvline(mean,       color="black", lw=1.5,
+        median = stats.get("median", np.nan)
+        mean   = stats["mean"]
+        ax.axvline(median, color="black", lw=1.5,
+                   label=f"median = {median:.3f} ns")
+        ax.axvline(mean,   color="gray",  lw=1.0, ls="--",
                    label=f"mean = {mean:.3f} ns")
-        ax.axvline(mean - std, color="black", lw=1.0, ls="--",
-                   label=f"σ = {std:.3f} ns")
-        ax.axvline(mean + std, color="black", lw=1.0, ls="--")
         ax.set_xlabel("τ (ns)", fontsize=11)
         ax.set_ylabel("Pixel count", fontsize=11)
         #ax.set_title(label, fontsize=11)
@@ -452,6 +452,7 @@ def process_tiff_lifetime_map(
     fit_biexp: bool = True,
     fit_start_ns: Optional[float] = None,
     fit_end_ns: Optional[float] = None,
+    tau_max_ns: float = 12.0,
 ) -> dict:
     """Full lifetime-map pipeline for one TIFF stack."""
     sep = "═" * 65
@@ -499,6 +500,38 @@ def process_tiff_lifetime_map(
     n_mask = int(mask.sum())
     print(f"  Otsu mask   : {n_mask} pixels  (threshold = {otsu_thr:.3g})")
 
+    # ── 5b. Save Otsu mask for visual inspection ──────────────────────────
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _stem_early = tiff_path.stem.replace(" ", "_")
+
+    # Binary mask (white = masked-in, black = excluded)
+    fig_m, ax_m = plt.subplots(figsize=(5, 5))
+    ax_m.axis("off")
+    ax_m.imshow(mask, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+    #ax_m.set_title(f"Otsu mask  (thr={otsu_thr:.3g},  {n_mask} px)", fontsize=8)
+    fig_m.tight_layout(pad=0.3)
+    _mask_path = output_dir / f"{_stem_early}_otsu_mask.png"
+    fig_m.savefig(_mask_path, dpi=200, bbox_inches="tight")
+    plt.close(fig_m)
+    print(f"  Saved: {_mask_path.name}")
+
+    # Mask overlaid on intensity projection (red = excluded, green = included)
+    fig_o, ax_o = plt.subplots(figsize=(5, 5))
+    ax_o.axis("off")
+    _int_norm = intensity_clean / (intensity_clean.max() + 1e-9)
+    _overlay  = np.stack([_int_norm, _int_norm, _int_norm], axis=-1)
+    _red_ch = _overlay[:, :, 0].copy(); _red_ch[mask]  = 0.0
+    _grn_ch = _overlay[:, :, 1].copy(); _grn_ch[~mask] = 0.0
+    _overlay[:, :, 0] = _red_ch
+    _overlay[:, :, 1] = _grn_ch
+    ax_o.imshow(np.clip(_overlay, 0, 1), interpolation="nearest")
+    #ax_o.set_title("green = fitted  |  red = excluded", fontsize=8)
+    fig_o.tight_layout(pad=0.3)
+    _overlay_path = output_dir / f"{_stem_early}_otsu_mask_overlay.png"
+    fig_o.savefig(_overlay_path, dpi=200, bbox_inches="tight")
+    plt.close(fig_o)
+    print(f"  Saved: {_overlay_path.name}")
+
     # ── 6. Global fit window ──────────────────────────────────────────────
     start_idx, end_idx, start_ns, end_ns = compute_global_fit_window(
         stack, mask, time_ns, peak_offset_bins=peak_offset_bins
@@ -526,6 +559,7 @@ def process_tiff_lifetime_map(
         bin_radius=bin_radius,
         min_counts=min_counts,
         fit_biexp=fit_biexp,
+        tau_max_ns=tau_max_ns,
     )
     n_valid_mono = int(np.isfinite(maps["tau_mono"]).sum())
     n_valid_bi   = int(np.isfinite(maps["tau_avg"]).sum())
@@ -557,11 +591,15 @@ def process_tiff_lifetime_map(
             ]
         n_excl = n_total - int(v.size)
         if v.size == 0:
-            return {"mean": np.nan, "std": np.nan, "p05": np.nan,
+            return {"mean": np.nan, "median": np.nan, "std": np.nan,
+                    "mad": np.nan, "p05": np.nan,
                     "p95": np.nan, "n_excl": n_excl}
+        _med = float(np.median(v))
         return {
             "mean":   float(v.mean()),
+            "median": _med,
             "std":    float(v.std()),
+            "mad":    float(np.median(np.abs(v - _med))),
             "p05":    float(np.percentile(v, 5)),
             "p95":    float(np.percentile(v, 95)),
             "n_excl": n_excl,
@@ -573,11 +611,11 @@ def process_tiff_lifetime_map(
     s2 = _stats(maps["tau2"], bound_tol=_TAU_BOUND_TOL)
     print(
         f"  τ_mono      : {sm['mean']:.3f} ± {sm['std']:.3f} ns  "
-        f"[5–95 %: {sm['p05']:.3f} – {sm['p95']:.3f}]"
+        f"median = {sm['median']:.3f}  [5–95 %: {sm['p05']:.3f} – {sm['p95']:.3f}]"
     )
     print(
         f"  ⟨τ⟩_bi-exp  : {sb['mean']:.3f} ± {sb['std']:.3f} ns  "
-        f"[5–95 %: {sb['p05']:.3f} – {sb['p95']:.3f}]"
+        f"median = {sb['median']:.3f}  [5–95 %: {sb['p05']:.3f} – {sb['p95']:.3f}]"
     )
     if fit_biexp:
         excl1 = s1.get("n_excl", 0)
@@ -586,17 +624,24 @@ def process_tiff_lifetime_map(
         excl2_str = f"  [{excl2} px at bound excl.]" if excl2 > 0 else ""
         print(
             f"  τ₁          : {s1['mean']:.3f} ± {s1['std']:.3f} ns  "
-            f"[5–95 %: {s1['p05']:.3f} – {s1['p95']:.3f}]{excl1_str}"
+            f"median = {s1['median']:.3f}  [5–95 %: {s1['p05']:.3f} – {s1['p95']:.3f}]{excl1_str}"
         )
         print(
             f"  τ₂          : {s2['mean']:.3f} ± {s2['std']:.3f} ns  "
+            f"median = {s2['median']:.3f}  MAD = {s2['mad']:.3f}  "
             f"[5–95 %: {s2['p05']:.3f} – {s2['p95']:.3f}]{excl2_str}"
         )
 
-    # ── 10. Save plots ────────────────────────────────────────────────────
+    # ── 10. Save numpy arrays (for cross-section comparison) ─────────────
     output_dir.mkdir(parents=True, exist_ok=True)
     stem          = tiff_path.stem.replace(" ", "_")
     fit_range_str = f"{start_ns:.2f}-{end_ns:.2f}ns"
+
+    npy_keys = ["tau_mono", "tau_avg", "tau1", "tau2"] if fit_biexp else ["tau_mono"]
+    for key in npy_keys:
+        np.save(output_dir / f"{stem}_{key}.npy", maps[key])
+
+    # ── 11. Save plots ────────────────────────────────────────────────────
 
     # (map_key, filename_tag, cmap_name, (vmin, vmax))
     plot_specs = [
@@ -620,7 +665,7 @@ def process_tiff_lifetime_map(
             vmax=vmax,
         )
 
-    # ── 10b. Lifetime histograms (one PNG per quantity) ───────────────────
+    # ── 11b. Lifetime histograms (one PNG per quantity) ───────────────────
     save_tau_histogram(
         maps["tau_mono"], sm,
         "τ (mono-exp fit)",
@@ -649,7 +694,7 @@ def process_tiff_lifetime_map(
             exclude_bounds_tol=_TAU_BOUND_TOL,
         )
 
-    # ── 11. Summary row ───────────────────────────────────────────────────
+    # ── 12. Summary row ───────────────────────────────────────────────────
     return {
         "file":               str(tiff_path),
         "n_bins":             N_bins,
@@ -662,17 +707,23 @@ def process_tiff_lifetime_map(
         "n_valid_mono":       n_valid_mono,
         "n_valid_biexp":      n_valid_bi,
         "tau_mono_mean_ns":   sm["mean"],
+        "tau_mono_median_ns": sm["median"],
         "tau_mono_std_ns":    sm["std"],
         "tau_mono_p05_ns":    sm["p05"],
         "tau_mono_p95_ns":    sm["p95"],
         "tau_avg_mean_ns":    sb["mean"],
+        "tau_avg_median_ns":  sb["median"],
         "tau_avg_std_ns":     sb["std"],
         "tau_avg_p05_ns":     sb["p05"],
         "tau_avg_p95_ns":     sb["p95"],
         "tau1_mean_ns":        s1["mean"],
+        "tau1_median_ns":      s1["median"],
         "tau1_std_ns":         s1["std"],
+        "tau1_mad_ns":         s1["mad"],
         "tau2_mean_ns":        s2["mean"],
+        "tau2_median_ns":      s2["median"],
         "tau2_std_ns":         s2["std"],
+        "tau2_mad_ns":         s2["mad"],
         "otsu_threshold":     float(otsu_thr),
         "artifact_detected":  bool(trim_report["detected"]),
     }
@@ -742,6 +793,11 @@ def main() -> None:
         "--fit-end-ns", type=float, default=None,
         help="Fit window end in ns (default: auto from last bin with signal)",
     )
+    parser.add_argument(
+        "--tau-max-ns", type=float, default=12.0,
+        help="Upper bound on τ for bi-exponential fitting in ns (default: 12.0). "
+             "Tighten to reduce outliers in τ₂, e.g. --tau-max-ns 6 for DAPI in cells",
+    )
 
     args = parser.parse_args()
 
@@ -759,6 +815,7 @@ def main() -> None:
         fit_biexp=not args.no_biexp,
         fit_start_ns=args.fit_start_ns,
         fit_end_ns=args.fit_end_ns,
+        tau_max_ns=args.tau_max_ns,
     )
 
     input_path = Path(args.input)
