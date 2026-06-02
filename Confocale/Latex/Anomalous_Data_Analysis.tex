@@ -1,0 +1,513 @@
+﻿\section{Anomalous Diffusion: Data Analysis and Results}\label{Ch:Anomalous_Diff}
+\subsection{Introduction}
+In this section, we analyze anomalous diffusion. As discussed in Chapter \ref{Ch:ergodicity_breaking}, anomalous diffusion arises when the assumptions of Einstein's classical theory for normal diffusion (that particle displacements are independent, uncorrelated, and characterized by a finite variance) are violated. 
+
+
+In our case, since we are analyzing a 15\% PEG solution and a 18\% PEG solution, we expect a sub-diffusive model \cite{doi:10.1021/acs.langmuir.7b03418, ijms241311148}. This is because PEG acts as a polymer, creating a crowded environment with physical obstacles to particle motion. This suggests a dynamics compatible with \textit{Fractional Brownian Motion} (FBM), namely a sub-diffusive but ergodic transport regime. The theoretical details of this model are discussed in Chapter \ref{Ch:ergodicity_breaking}.
+
+For the analysis with TrackMate (see Chapter \ref{Ch:4}), we kept the same parameters used previously, with the exception of the Linking Max Distance (LMD) and the Gap-Closing Max Distance (GC), which were set to $1\,\mu\text{m}$. This adjustment is necessary because particles become trapped during their motion; the polymer forms a tangled network that physically confines the particles (the ``caging effect''), slowing down their spatial exploration \cite{doi:10.1021/acs.langmuir.7b03418}. Therefore, reducing LMD and GC is crucial to correctly keep track of the same particle (otherwise, TrackMate might incorrectly link a spot to a neighboring particle).
+\subsection{Calculation of MSD Curves and Fitting Results}\label{Ch:Data_analysis_anomalous}
+A very similar approach to the one used in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis} is adopted to analyze the anomalous diffusion data. We keep the same error estimation presented in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis} and we apply the same analytical framework. First, we report the plots of the $\mathrm{eaMSD}$ and $\mathrm{taMSD}$ calculated over the first 10-25\% of the lag times to investigate the general behavior of the system in Figures \ref{fig:anomalous_eaMSD_plots} and \ref{fig:anomalous_taMSD_plots}.
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series14_240nm_glicerolo200_spots_147tracce_eamsd_f010.svg}
+        \caption{Plot of the first 10\% of the lag times.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series14_240nm_glicerolo200_spots_147tracce_eamsd_f025.svg}
+        \caption{Plot of the first 25\% of the lag times.}
+    \end{subfigure}
+
+    \caption{Analysis of the eaMSD for anomalous diffusion using different fitting windows. The MSD was computed over 147 trajectories.}
+    \label{fig:anomalous_eaMSD_plots}
+\end{figure}
+\FloatBarrier
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series2_240nm_glicerolo200_spots_89tracce_tamsd_f010.svg}
+        \caption{Plot of the first 10\% of the lag times.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series2_240nm_glicerolo200_spots_89tracce_tamsd_f025.svg}
+        \caption{Plot of the first 25\% of the lag times.}
+    \end{subfigure}
+
+    \caption{Analysis of the taMSD for anomalous diffusion using different fitting windows. The MSD was computed over 89 trajectories.}
+    \label{fig:anomalous_taMSD_plots}
+\end{figure}
+\FloatBarrier
+
+
+As discussed in Chapter \ref{Ch:3}, we prepared two solutions containing different concentrations of PEG, water, and glycerol. The presence of PEG makes it difficult to compute the theoretical diffusion coefficient using the Stokes-Einstein equation, as was done in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis}. However, we can estimate an upper bound for the diffusion coefficient by considering only the water-glycerol mixture. This approach assumes that the polymer network introduces obstacles and increases the macroscopic viscosity, thereby strictly slowing down the particles compared to a polymer-free solvent \cite{ijms241311148, doi:10.1021/acs.langmuir.7b03418}. 
+
+Specifically, we compute the effective glycerol concentration in the solvent as: $$C_g = \frac{m_g}{m_{\mathrm{H_2O}} + m_g}$$
+where $m_g$ is the glycerol mass of our sample and $m_{\mathrm{H_2O}}$ is the water mass. Following the same method presented in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis}, we estimate the theoretical upper bounds for the diffusion coefficient, $D_{\mathrm{th}}$, as follows:
+\begin{itemize}
+    \item $D_{th}^1 \leq 0.200\,\mu\mathrm{m}^2/\mathrm{s}$, by considering $0.250\,\mathrm{g}$ of glycerol and $0.175\,\mathrm{g}$ of $\mathrm{H_2O}$ (PEG is $0.075\,\mathrm{g}$, representing 15\% by mass).
+    \item $D_{th}^2 \leq 0.350\,\mu\mathrm{m}^2/\mathrm{s}$, by considering $0.203\,\mathrm{g}$ of glycerol and $0.212\,\mathrm{g}$ of $\mathrm{H_2O}$ (PEG is $0.091\,\mathrm{g}$, representing 18\% by mass).
+\end{itemize}
+
+In order to fit our data, we use the following model:
+\begin{equation}\label{eq:anomalous_equation_drift}
+    \mathrm{MSD}(\tau) = 4D_{\alpha}\tau^{\alpha} + c
+\end{equation}
+where, as in Eq. \ref{eq:linear_fit}, the parameter $c$ is the offset representing the dynamic/localization error.
+In our data, a significant drift velocity $\mathbf{v}$ is present, which strongly affects the estimation of the anomalous exponent $\alpha$ (see Figures \ref{fig:anomalous_eaMSD_plots} and \ref{fig:anomalous_taMSD_plots}).
+Whereas drift in non-anomalous diffusion still allows reasonably reliable results, in the present case where the goal is to estimate $\alpha$ it can substantially bias the fitted value.
+
+
+Specifically, uncorrected drift leads to an overestimation of $\alpha$, biasing the fit toward the ballistic limit ($\alpha \to 2$). To correct for this behavior, we apply established statistical techniques found in the literature \cite{QIAN1991910}:
+\begin{itemize}
+    \item \textbf{eaMSD}: In the presence of drift, the particle displacement can be modeled as $\Delta\mathbf{r}_i(\tau) = \Delta\mathbf{r}_{\mathrm{diff},i}(\tau) + \mathbf{v}\tau$, where the first term is the purely random anomalous diffusion. The raw eaMSD is therefore:
+    \begin{equation*}
+    \mathrm{eaMSD}_{\mathrm{raw}}(\tau) = \frac{1}{M} \sum_{i=1}^{M} \lvert \Delta\mathbf{r}_{\mathrm{diff},i}(\tau) + \mathbf{v}\tau \rvert^2 \approx 4D_\alpha\tau^\alpha + \lvert\mathbf{v}\rvert^2\tau^2
+    \end{equation*} 
+    In this expression, the cross term has been neglected because the diffusive displacement has zero mean in the ensemble limit.
+
+    However, from basic statistics, adding a constant value (the drift $\mathbf{v}\tau$) to a random spatial variable (the purely diffusive displacement) only shifts the mean but leaves the variance unchanged, i.e., $\mathrm{Var}(X + C) = \mathrm{Var}(X)$ \cite{Pruneau_2017}. Therefore, instead of computing the mean squared displacement directly, we can compute the sample variance of the displacements across all $M$ particles \cite{QIAN1991910}. In two dimensions, for a given time lag $\tau$, the sample variance along the $x$-axis is:
+    \begin{equation}\label{eq:eq_variance}
+        \mathrm{Var}(\Delta x) = \frac{1}{M - 1} \sum_{i = 1}^M (\Delta x_i - \langle\Delta x\rangle)^2
+    \end{equation}
+    By substituting $\Delta x_i = \Delta x_{\mathrm{diff},i} + v_{x}\tau$, and noting that $\langle \Delta x \rangle = \langle \Delta x_{\mathrm{diff}} \rangle + v_x\tau$, the centered displacement becomes:
+    \begin{equation*}
+        \Delta x_i - \langle \Delta x \rangle = \Delta x_{\mathrm{diff},i} - \langle \Delta x_{\mathrm{diff}} \rangle.
+    \end{equation*}
+    Therefore, the deterministic drift term cancels out in the variance. The same argument applies to the $y$ direction. Consequently, the sum of the spatial variances gives the corrected eaMSD:
+    \begin{equation*}
+        \mathrm{eaMSD}_{\mathrm{corr}}(\tau) = \mathrm{Var}(\Delta x (\tau)) + \mathrm{Var}(\Delta y (\tau)) = 4 D_\alpha \tau^\alpha
+    \end{equation*}
+    Expanding the variance definition from Eq. \ref{eq:eq_variance} yields the final corrected formula used to perform our fits:
+    \begin{equation}
+    \mathrm{eaMSD}_{\mathrm{corr}}(\tau)
+    = \frac{1}{M-1} \sum_{i=1}^{M}
+    \left\lvert
+    \Delta \mathbf{r}_i(\tau)
+    - \langle \Delta \mathbf{r}(\tau) \rangle
+    \right\rvert^2
+    \end{equation}
+    Note that the sample variance includes Bessel's correction (the factor $M/(M-1)$) to provide an unbiased estimator of the population variance.
+
+    \item \textbf{taMSD}: To remove the drift from the time-averaged MSD, the variance approach described above cannot be applied directly. This is because the $\mathrm{taMSD}$ is computed for each trajectory individually over time, rather than from an ensemble of displacements at a fixed lag time. We therefore use the Ensemble Drift method \cite{CROCKER1996298}, described in Appendix \ref{Ch:Appendix_A}. 
+    
+    The basic idea is to estimate the macroscopic motion common to the sample by averaging the frame-to-frame displacements of the particles tracked in consecutive frames, and then reconstructing the corresponding drift trajectory, $\mathbf{R}_{\mathrm{drift}}(t)$. This common trajectory is subtracted from each measured track,
+    \begin{equation*}
+        \mathbf{r}_i^{\,\prime}(t) = \mathbf{r}_i(t) - \mathbf{R}_{\mathrm{drift}}(t),
+    \end{equation*}
+    so that the corrected coordinates retain the stochastic fluctuations of the individual particles while removing the coherent displacement of the ensemble. The standard $\mathrm{taMSD}$ is then computed on these drift-corrected trajectories.
+\end{itemize}
+
+The impact of the drift correction depends on the dataset: in some experiments the correction only weakly affects the MSD curves, while in others it produces a substantial change in the apparent particle motion, as shown in Figures \ref{fig:eamsd_drift_cmp_glic200_series2} and \ref{fig:tamsd_drift_cmp_glic200_series2}.
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/eaMSD_drift_cmp_glic200_series2_240nm_glicerolo200_spots_89tracce_f010.svg}
+        \caption{eaMSD computed over the first 10\% of the lag-time points.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/eaMSD_drift_cmp_glic200_series2_240nm_glicerolo200_spots_89tracce_f025.svg}
+        \caption{eaMSD computed over the first 25\% of the lag-time points.}
+    \end{subfigure}
+
+    \caption{Comparison between the raw and drift-corrected eaMSD for the sample with 40\% glycerol and 18\% PEG. The MSD was computed over 89 trajectories.}
+    \label{fig:eamsd_drift_cmp_glic200_series2}
+\end{figure}
+\FloatBarrier
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/taMSD_drift_cmp_glic200_series2_240nm_glicerolo200_spots_89tracce_f010.svg}
+        \caption{$\langle \mathrm{taMSD} \rangle$ computed over the first 10\% of the lag-time points.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/taMSD_drift_cmp_glic200_series2_240nm_glicerolo200_spots_89tracce_f025.svg}
+        \caption{$\langle \mathrm{taMSD} \rangle$ computed over the first 25\% of the lag-time points.}
+    \end{subfigure}
+
+    \caption{Comparison between the raw and drift-corrected $\langle \mathrm{taMSD} \rangle$ for the sample with 40\% glycerol and 18\% PEG. The MSD was computed over 89 trajectories.}
+    \label{fig:tamsd_drift_cmp_glic200_series2}
+\end{figure}
+\FloatBarrier
+
+We present here the fitting results obtained using the model described in Eq. \ref{eq:anomalous_equation_drift}.
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/240nm_glicerolo50_serie017_196minstep_eamsd_anomalous_offset_f010.svg}
+        \caption{Fit over the first 10\% of the lag times.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/240nm_glicerolo50_serie008_345minstep_ens_tamsd_anomalous_offset_f010.svg}
+        \caption{Fit over the first 10\% of the lag times.}
+    \end{subfigure}
+
+    \caption{Fit of the eaMSD and taMSD over the first 10\% of the points for the sample with 50\% glycerol and 15\% PEG.}
+    \label{fig:anomalous_fit_taMSD_eaMSD_PEG_18_plots}
+\end{figure}
+\FloatBarrier
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series18_240nm_glicerolo200_spots_145tracce_eamsd_anomalous_offset_f010.svg}
+        \caption{Fit over the first 10\% of the lag times.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series4_240nm_glicerolo200_spots_57tracce_ens_tamsd_anomalous_offset_f010.svg}
+        \caption{Fit over the first 10\% of the lag times.}
+    \end{subfigure}
+
+    \caption{Fit of the eaMSD and taMSD over the first 10\% of the points for the sample with 40\% glycerol and 18\% PEG.}
+    \label{fig:anomalous_fit_taMSD_eaMSD_PEG_15_plots}
+\end{figure}
+\FloatBarrier
+
+Note that the fit on the taMSD is performed on the ensemble-averaged taMSD, denoted as $\langle \mathrm{taMSD} \rangle$. This significantly reduces the statistical uncertainty, since the standard error scales as $1/\sqrt{M}$, where $M$ is the number of analyzed trajectories. For this reason, the error bars of $\langle \mathrm{taMSD} \rangle$ are slightly smaller than those of the $\mathrm{eaMSD}$. For both solutions, the reduced chi-squared is smaller than unity ($\chi_{\nu}^2 < 1$). This suggests that the experimental uncertainties used in the fit may be overestimated, since the residuals are smaller than expected from the assigned error bars. The considerations on error estimation discussed in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis} also apply here, and may be even more relevant in the case of anomalous diffusion, where sample heterogeneity plays a crucial role and the noise, together with the localization uncertainty $\sigma$, is larger than in the non-anomalous case. Therefore, the values of $\chi_{\nu}^2$ should be interpreted with caution: they mainly provide a qualitative indication of the agreement between the experimental data and the theoretical model used for the fit.
+
+The main difference with respect to the previous analysis is that the systematic bias induced by drift is no longer present, since the drift has been removed using the procedure described above. From the reduced chi-squared values, we can see that the discrepancy between the theoretical model and the experimental data is generally between $1\sigma$ and $2\sigma$, which is satisfactory.
+We can also perform a qualitative analysis of the residuals over the first 10\% of the lag times $\tau$, as in the previous chapter, to verify whether the systematic bias affecting the system (the drift $\mathbf{v}$) has been effectively removed.
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/240nm_glicerolo50_serie017_196minstep_eamsd_anomalous_offset_residuals_f010.svg}
+        \caption{Residual analysis of the eaMSD fit for the sample with 50\% glycerol and 15\% PEG.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/240nm_glicerolo50_serie008_345minstep_ens_tamsd_anomalous_offset_residuals_f010.svg}
+        \caption{Residual analysis of the $\langle \mathrm{taMSD} \rangle$ fit for the sample with 50\% glycerol and 15\% PEG.}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series18_240nm_glicerolo200_spots_145tracce_eamsd_anomalous_offset_residuals_f010.svg}
+        \caption{Residual analysis of the eaMSD fit for the sample with 40\% glycerol and 18\% PEG.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/series4_240nm_glicerolo200_spots_57tracce_ens_tamsd_anomalous_offset_residuals_f010.svg}
+        \caption{Residual analysis of the $\langle \mathrm{taMSD} \rangle$ fit for the sample with 40\% glycerol and 18\% PEG.}
+    \end{subfigure}
+
+    \caption{Residual analysis of the anomalous-diffusion fits performed on the first 10\% of the lag times for the two analyzed samples.}
+    \label{fig:anomalous_residuals_f010}
+\end{figure}
+%\FloatBarrier
+As can be seen from Figure \ref{fig:anomalous_residuals_f010}, the drift no longer appears as it did in the previous section, confirming that the correction is effective. However, at larger lag times the correction gradually becomes less effective, but larger time lags $\tau$ are not included in our analysis.
+
+Also in this case, the relative weight of the offset $c$ (representing the localization error) is not negligible. Using a slightly modified version of Eq. \ref{eq:offset_weight}, we can compute the weight $\omega$ of this offset with respect to the purely diffusive term of the $\mathrm{MSD}(\tau)$:
+\begin{equation}\label{eq:offset_weight_anomalous}
+    \omega = \frac{|c|}{4D_{\alpha}\tau^{\alpha}}
+\end{equation}
+Evaluating this at the first time lag ($\Delta t = \tau \approx 0.38\,\mathrm{s}$), we obtain four $\omega$ values corresponding to our estimators:
+
+\begin{table}[!htbp]
+    \centering
+    \caption{Relative weight of the offset term evaluated at $\tau = 0.38$ s for the two PEG-glycerol samples, distinguishing eaMSD and $\langle$taMSD$\rangle$ fits.}
+    \begin{tabular}{ccccc}
+        \toprule
+        \textbf{Estimator} & $\omega$ & $\sigma_{\mathrm{loc}}$ (nm) & \textbf{PEG concentration} & \textbf{Glycerol concentration} \\
+        \midrule
+        $\langle$taMSD$\rangle$ & 5.4\% & 13.9 & 15\% & 50\% \\
+        eaMSD & 17.3\% & 47.3 & 15\% & 50\% \\
+        $\langle$taMSD$\rangle$ & 142.6\% & 67.8 & 18\% & 40\% \\
+        eaMSD & 43.5\% & 54.2 & 18\% & 40\% \\
+        \bottomrule
+    \end{tabular}
+    \label{tab:offset_weight_anomalous_samples}
+\end{table}
+
+Thus, while in the first sample (15\% PEG) the relative weight of the localization error is moderate, it becomes much more significant in the second sample (18\% PEG). This suggests that the apparent localization error is substantially amplified when the particles are embedded in a denser and more restrictive polymer network. Nevertheless, all the estimated localization errors fall within the range $\sigma \in [13.9, 67.8]~\mathrm{nm}$ (the localization error is estimated with the equation $|c| = 4\sigma_{\mathrm{loc}}^2$), which is physically reasonable for this type of weakly anomalous diffusive motion tracked with fluorescent particles \cite{manzo2015review}.
+
+
+Next, we extract the generalized diffusion coefficient, $D_{\alpha}$, for our two samples. Following the same procedure detailed in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis}, we fitted the first 10\% of the taMSD points of each trajectory using the model in Eq. \ref{eq:anomalous_equation_drift} to ensure robust statistics. This yields two distributions of $D_{\alpha}$ values, allowing us to inspect the spread across individual trajectories and directly compare the two anomalous-diffusion environments.
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/tamsd_Dalpha_histogram_anomalous_offset_f010_glic200.svg}
+        \caption{Histogram of the fitted $D_{\alpha}$ values for the sample with 40\% glycerol and 18\% PEG.}
+        \label{Fig:Hist_a}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/tamsd_Dalpha_histogram_anomalous_offset_f010_glic50.svg}
+        \caption{Histogram of the fitted $D_{\alpha}$ values for the sample with 50\% glycerol and 15\% PEG.}
+        \label{Fig:Hist_b}
+    \end{subfigure}
+
+    \caption{Histograms of the generalized anomalous diffusion coefficient $D_{\alpha}$ obtained by fitting the first 10\% of the taMSD points of each trajectory for the two PEG-glycerol samples.}
+    \label{fig:Dalpha_histograms_anomalous_samples}
+\end{figure}
+
+From these distributions, we obtain: $$D_{\alpha} = (7.83 \pm 0.45) \times 10^{-3}\,\mu\mathrm{m}^2/\mathrm{s}^{\alpha}$$ for the 18\% PEG sample (Fig. \ref{Fig:Hist_a}), and: $$D_{\alpha} = (1.03 \pm 0.06) \times 10^{-2}\,\mu\mathrm{m}^2/\mathrm{s}^{\alpha}$$ for the 15\% PEG sample (Fig. \ref{Fig:Hist_b}). To maintain a robust statistical approach, we use the median as our central estimator, and the uncertainty is represented by the Standard Error of the Median (SEM), computed via clustered bootstrapping, as done for the non-anomalous diffusion in Chapter \ref{Ch:Chapter_4_Fitting_Results_and_Analysis}.
+
+To compare these experimental results with the theoretical free-diffusion limits and to quantify the impact of the polymer more accurately, we also fitted the first 10\% of the data by imposing $\alpha = 1$. The diffusion coefficient was then estimated as the median of the corresponding histogram. Otherwise, a direct comparison between the expected and measured results would not be meaningful, since they have different physical units. Although this is an approximation ($D \neq D_{\alpha}$), it provides a reasonable estimate of the short-time apparent normal diffusion coefficient, given that at very short lag times the motion is quasi-diffusive ($\alpha \approx 1$).
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/tamsd_D_linear_offset_histogram_f010_glic50.svg}
+        \caption{Histogram of the fitted $D$ values with fixed $\alpha = 1$ for the sample with 50\% glycerol and 15\% PEG.}
+        \label{fig:Hist_D_linear_b}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.45\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/tamsd_D_linear_offset_histogram_f010_glic200.svg}
+        \caption{Histogram of the fitted $D$ values with fixed $\alpha = 1$ for the sample with 40\% glycerol and 18\% PEG.}
+        \label{fig:Hist_D_linear_a}
+    \end{subfigure}
+
+    \caption{Histograms of the apparent short-time diffusion coefficient $D$ obtained by fitting the first 10\% of the taMSD points with fixed $\alpha = 1$.}
+    \label{fig:D_linear_histograms_anomalous_samples}
+\end{figure}
+
+By forcing the linear model, we obtain: $$D = (9.75 \pm 0.61) \times 10^{-3}\,\mu\mathrm{m}^2/\mathrm{s}$$ for the 15\% PEG sample (Fig. \ref{fig:Hist_D_linear_b}), and: $$D = (7.28 \pm 0.48) \times 10^{-3}\,\mu\mathrm{m}^2/\mathrm{s}$$ for the 18\% PEG sample (Fig. \ref{fig:Hist_D_linear_a}). 
+Notice that the values obtained by fixing $\alpha = 1$ are slightly lower than those obtained when $\alpha$ is treated as a free parameter. This happens because, when the motion is sub-diffusive ($\alpha < 1$), the MSD grows more slowly as the lag time increases. Therefore, if we force the data to follow a straight line ($\alpha = 1$), the fit returns an average slope over a curve that progressively flattens. This average slope is smaller, and since $D$ is proportional to the slope, the resulting apparent diffusion coefficient is also lower.
+
+We can now directly compare these apparent short-time diffusion coefficients with the theoretical PEG-free diffusion limits computed previously, in order to isolate the systematic deviation caused by the polymer network. To quantify the effect of PEG, we compute the residual mobility, $\gamma$ \cite{doi:10.1021/acs.langmuir.7b03418, ijms241311148}:
+\begin{equation}\label{eq:diffusion_coefficient_ratio}
+    \gamma = \frac{D_{\mathrm{exp}}}{D_{\mathrm{th}}}
+\end{equation}
+where, in our case, $D_{\mathrm{exp}} = D_{\alpha = 1} = D$ is the experimentally estimated diffusion coefficient.
+The quantity $D_{\mathrm{th}}$ represents the upper limit corresponding to a particle moving freely in the sample without obstacles. Therefore, we expect $\gamma < 1$ \cite{doi:10.1021/acs.langmuir.7b03418}; the smaller the value of $\gamma$, the lower the particle mobility due to the presence of PEG.
+
+In Eq. \ref{eq:diffusion_coefficient_ratio}, the uncertainty was propagated in the simple form
+$$\sigma_{\gamma} = \frac{\sigma_{D_{\mathrm{exp}}}}{D_{\mathrm{th}}}.$$
+We obtain:
+\begin{itemize}
+    \item $\gamma = 0.049 \pm 0.003$ for the sample with 15\% PEG and 50\% glycerol.
+    \item $\gamma = 0.021 \pm 0.001$ for the sample with 18\% PEG and 40\% glycerol.
+\end{itemize}
+
+These values should be interpreted as an approximate estimate of the mobility reduction induced by PEG, rather than as exact diffusion coefficients. This is because the analysis is performed after drift correction, which can influence the absolute MSD values, and because the fit is constrained to $\alpha = 1$. Therefore, $D_{\mathrm{exp}}$ is only an apparent diffusion coefficient. Within this approximation, particle mobility is reduced by approximately 95\% in the 15\% PEG solution and by approximately 98\% in the 18\% PEG solution.
+
+This comparison is still useful because it highlights the effect of PEG more clearly than the absolute value of $D_{\mathrm{exp}}$ alone. Sample 2 (40\% glycerol) has a less viscous background solvent than Sample 1 (50\% glycerol), as reflected by its higher theoretical free-diffusion limit ($0.350 \, \mu\mathrm{m}^2/\mathrm{s}$ vs $0.200\,\mu\mathrm{m}^2/\mathrm{s}$). If the glycerol-water viscosity were the only relevant factor, Sample 2 would be expected to show a larger diffusion coefficient. Instead, its apparent diffusion coefficient is smaller ($0.0073 \, \mu\mathrm{m}^2/\mathrm{s}$ vs $0.0097\,\mu\mathrm{m}^2/\mathrm{s}$), and the residual mobility $\gamma$ decreases from approximately $5\%$ to approximately $2\%$. This indicates that PEG effectively influences the diffusive motion.
+
+\subsubsection{Analysis of \texorpdfstring{$\alpha$}{alpha}}
+To determine whether the process exhibits normal or anomalous diffusion, we use the criterion already introduced in Chapter \ref{Ch:ergodicity_breaking}, based on the comparison between the $\mathrm{eaMSD}$ and the ensemble average of the $\langle \mathrm{taMSD} \rangle$, computed over $M$ trajectories and defined in Eq. \ref{eq:ensamble_tamsd}. Following the approach proposed by Metzler et al. (2014) \cite{C4CP03465A}, we apply this comparison here as a diagnostic tool for the fitted anomalous exponent. By fitting the log-log plots of the two MSD curves, we extract the corresponding exponent $\alpha$ of the generalized diffusive model and use it to characterize the system dynamics:
+\begin{align}
+    \mathrm{MSD}(\tau) &= 4D_{\alpha}\tau^{\alpha} \\
+    \log\!\bigl(\mathrm{MSD}(\tau)\bigr) &= \log(4D_{\alpha}) + \alpha\log(\tau)
+\end{align}
+
+In general, three different physical scenarios can be identified \cite{C4CP03465A}:
+\begin{itemize}
+    \item \textbf{Standard Brownian motion}: if the system is ergodic and undergoes normal diffusion, the $\mathrm{eaMSD}$ and $\langle \mathrm{taMSD} \rangle$ curves coincide and both display a strictly linear behavior in the log-log representation, with slopes $\alpha_{\mathrm{ea}} = \alpha_{\langle \mathrm{ta} \rangle} = 1$.
+
+    \item \textbf{Anomalous ergodic processes}: when particles experience correlated motion without long trapping events, the system remains ergodic. In the log-log plot, the $\mathrm{eaMSD}$ and $\langle \mathrm{taMSD} \rangle$ curves overlap, but both exhibit the same sub-diffusive slope, $\alpha_{\mathrm{ea}} = \alpha_{\langle \mathrm{ta} \rangle} < 1$.
+
+    \item \textbf{Weak ergodicity breaking}: if particles alternate between periods in which they move very little and periods in which they move more freely, the system exhibits weak ergodicity breaking. In the log-log representation, the two curves clearly diverge: the $\mathrm{eaMSD}$ grows sub-diffusively ($\alpha_{\mathrm{ea}} < 1$), while the $\langle \mathrm{taMSD} \rangle$ may appear linear with respect to the lag time ($\alpha_{\langle \mathrm{ta} \rangle} \approx 1$), although its amplitude depends on the total measurement time.
+\end{itemize}
+\newpage
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/eamsd_vs_tamsd_glic50_f010.svg}
+        \caption{Log-log comparison between the eaMSD and $\langle \mathrm{taMSD} \rangle$ for the sample with 50\% glycerol and 15\% PEG, using the first 10\% of the lag times.}
+        \label{fig:eamsd_vs_tamsd_glic50_f010}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/eamsd_vs_tamsd_glic50_f025.svg}
+        \caption{Log-log comparison between the eaMSD and $\langle \mathrm{taMSD} \rangle$ for the sample with 50\% glycerol and 15\% PEG, using the first 25\% of the lag times.}
+        \label{fig:eamsd_vs_tamsd_glic50_f025}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/eamsd_vs_tamsd_glic200_f010.svg}
+        \caption{Log-log comparison between the eaMSD and $\langle \mathrm{taMSD} \rangle$ for the sample with 40\% glycerol and 18\% PEG, using the first 10\% of the lag times.}
+        \label{fig:eamsd_vs_tamsd_glic200_f010}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/eamsd_vs_tamsd_glic200_f025.svg}
+        \caption{Log-log comparison between the eaMSD and $\langle \mathrm{taMSD} \rangle$ for the sample with 40\% glycerol and 18\% PEG, using the first 25\% of the lag times.}
+        \label{fig:eamsd_vs_tamsd_glic200_f025}
+    \end{subfigure}
+
+    \caption{Log-log comparison of eaMSD and ensemble-averaged taMSD, using two different fitting windows.}
+    \label{fig:eamsd_vs_tamsd_glic50}
+\end{figure}
+\FloatBarrier
+From the fits, we observe that the coefficients $\alpha_{\mathrm{ea}}$ and $\alpha_{\langle \mathrm{ta} \rangle}$ are nearly identical within the analyzed time-lag window, and both values are close to 1. The agreement between the ensemble- and time-averaged descriptions indicates that the system is ergodic within the temporal and spatial scales explored here. At the same time, small deviations from $\alpha = 1$ suggest only a weak sub-diffusive tendency, which is not strong enough to establish anomalous diffusion with certainty.
+
+The absence of clear sub-diffusion at these specific scales can be attributed either to the \textit{continuum limit}, where the tracer is large enough or observed over spatial scales broad enough to perceive the crowded polymer mesh as a homogeneous viscous fluid, or to the \textit{long-time diffusive regime}, in which the particle successfully escapes local confinements \cite{doi:10.1021/acs.langmuir.7b03418}. Consequently, within our experimental window, PEG-induced slowing mainly reduces the overall mobility of the system, as previously quantified by the residual mobility parameter $\gamma$, while only weakly and not conclusively modifying the stochastic character of the random walk.
+
+To further validate these findings across the entire dataset, we analyzed the distributions of the fitted anomalous exponents:
+
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/alpha_paired_glic50_f010.svg}
+        \caption{Comparison of the fitted coefficients $\alpha_{\mathrm{ea}}$ and $\alpha_{\langle \mathrm{ta} \rangle}$ for the sample with 50\% glycerol and 15\% PEG, using the first 10\% of the lag times.}
+        \label{fig:alpha_paired_glic50_f010}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/alpha_paired_glic50_f025.svg}
+        \caption{Comparison of the fitted coefficients $\alpha_{\mathrm{ea}}$ and $\alpha_{\langle \mathrm{ta} \rangle}$ for the sample with 50\% glycerol and 15\% PEG, using the first 25\% of the lag times.}
+        \label{fig:alpha_paired_glic50_f025}
+    \end{subfigure}
+
+    \caption{Behavior of the fitted exponents $\alpha$ shown for two different fitting windows.}
+    \label{fig:alpha_paired_glic50}
+\end{figure}
+\FloatBarrier
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/alpha_paired_glic200_f010.svg}
+        \caption{Comparison of the fitted coefficients $\alpha_{\mathrm{ea}}$ and $\alpha_{\langle \mathrm{ta} \rangle}$ for the sample with 40\% glycerol and 18\% PEG, using the first 10\% of the lag times.}
+        \label{fig:alpha_paired_glic200_f010}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/alpha_paired_glic200_f025.svg}
+        \caption{Comparison of the fitted coefficients $\alpha_{\mathrm{ea}}$ and $\alpha_{\langle \mathrm{ta} \rangle}$ for the sample with 40\% glycerol and 18\% PEG, using the first 25\% of the lag times.}
+        \label{fig:alpha_paired_glic200_f025}
+    \end{subfigure}
+
+    \caption{Behavior of the fitted exponents $\alpha$ shown for two different fitting windows.}
+    \label{fig:alpha_paired_glic200}
+\end{figure}
+\FloatBarrier
+Overall, the analysis supports two main conclusions: the system is ergodic, and it may be weakly sub-diffusive. However, the evidence for sub-diffusion is not strong enough to draw a definitive conclusion.
+
+\subsubsection{Van Hove Distribution}\label{Ch:Van_Hove_dist}
+A further complementary check of the system's ergodicity is provided by the analysis of the van Hove distribution. Together with the comparison between the $\mathrm{eaMSD}$ and $\langle \mathrm{taMSD} \rangle$, this analysis allows us to assess whether the system exhibits ergodicity breaking.
+The van Hove distribution function, commonly denoted by $G(r,t)$, is a real-space dynamical correlation function that is fundamental for characterizing the spatial and temporal distribution of particles in a fluid or complex medium.
+In probabilistic terms, it describes the probability of finding a particle at position $r$ at time $t$, provided that at time $t = 0$ a particle was located at the origin of the reference frame \cite{szymanski2010elucidating}. In practice, for a Newtonian fluid in which the motion is non-anomalous and ergodic, the self-part of the distribution, $G_s(r,t)$, is expected to be Gaussian. The theoretical form of this distribution is discussed in Chapter \ref{Ch:prob_diffusion}. By contrast, if the diffusive motion is anomalous, structural deviations may appear in $G_s(r,t)$, such as broadened or elongated tails at intermediate times. The construction of the 2D $G_s(r,t)$ is the following: 
+\begin{itemize}
+    \item For each lag time, $\tau$, we compute the individual particle displacements $\Delta x_i(t,\tau) = x_i(t + \tau) - x_i(t)$ and $\Delta y_i(t,\tau) = y_i(t + \tau) - y_i(t)$. Note that the drift correction introduced in Section \ref{Ch:Data_analysis_anomalous} is applied here as well.
+    \item Assuming an isotropic medium, the experimental distribution can be estimated by constructing normalized histograms of the 1D displacements along either the $x$ or the $y$ direction. In this analysis, we focus on representing the histogram along the $x$ direction, $G_s(\Delta x,\tau)$.
+    \item After drift correction, a theoretical Gaussian distribution centered at zero and with the same standard deviation as the experimental data is superimposed on the histogram in order to visually assess any deviation from the expected Gaussian profile. Using a zero mean is appropriate here because the corrected Brownian displacement distribution is expected to be centered around zero; any residual non-zero mean would instead indicate an unremoved drift or systematic bias.
+    \item To quantify possible deviations of the experimental displacement distribution from the expected Gaussian profile, we compute the two-dimensional non-Gaussianity parameter \cite{C4CP03465A}:
+    \begin{equation*}
+        \beta(\tau) = \frac{\langle r^4(\tau) \rangle}{2\langle r^2(\tau) \rangle^2} - 1
+    \end{equation*}
+    where $r^2 = \Delta x^2 + \Delta y^2$ is the squared displacement in 2D, and the brackets $\langle \dots \rangle$ denote the average over all particles and time origins. For a pure Brownian motion in a homogeneous fluid, the distribution of displacements is perfectly Gaussian, yielding $\beta \approx 0$ \cite{C4CP03465A}. Conversely, a value of $\beta > 0$ indicates the presence of "long tails" in the distribution, which is a strong signature of dynamic heterogeneity, transient trapping, or non-ergodic anomalous diffusion mechanisms.
+\end{itemize}
+
+We now plot the distributions at different time lags, $\tau$, to study the shape of the pdf:
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/van_hove_dx_glic50_lag012_tau4p457e00s.svg}
+        \caption{$15\%$ PEG, $50\%$ glycerol, $\tau \approx 4.5~\mathrm{s}$.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/van_hove_dx_glic50_lag038_tau1p411e01s.svg}
+        \caption{$15\%$ PEG, $50\%$ glycerol, $\tau \approx 14.1~\mathrm{s}$.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/van_hove_dx_glic50_lag075_tau2p786e01s.svg}
+        \caption{$15\%$ PEG, $50\%$ glycerol, $\tau \approx 27.9~\mathrm{s}$.}
+    \end{subfigure}
+
+    \vspace{0.5em}
+
+    \begin{subfigure}[t]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/van_hove_dx_glic200_lag010_tau3p714e00s.svg}
+        \caption{$18\%$ PEG, $40\%$ glycerol, $\tau \approx 3.7~\mathrm{s}$.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/van_hove_dx_glic200_lag032_tau1p189e01s.svg}
+        \caption{$18\%$ PEG, $40\%$ glycerol, $\tau \approx 11.9~\mathrm{s}$.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/van_hove_dx_glic200_lag063_tau2p340e01s.svg}
+        \caption{$18\%$ PEG, $40\%$ glycerol, $\tau \approx 23.4~\mathrm{s}$.}
+    \end{subfigure}
+
+    \caption{Van Hove distributions $G_s(\Delta x,\tau)$ at different lag times for the two analyzed samples.}
+    \label{fig:van_hove_distributions_lags}
+\end{figure}
+
+As can be seen, the parameter $\beta$ remains close to zero for both samples, although it is roughly one order of magnitude larger at higher PEG concentration. Averaged over all lag times, the mean value of $\beta$ is $0.015$ for the sample with $15\%$ PEG and $50\%$ glycerol, and increases to $0.064$ for the sample with $18\%$ PEG and $40\%$ glycerol. We can also examine the overall behavior of $\beta$ as a function of $\tau$:
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/beta_vs_tau_glic50.svg}
+        \caption{Non-Gaussianity parameter $\beta(\tau)$ for the sample with $15\%$ PEG and $50\%$ glycerol.}
+        \label{fig:beta_vs_tau_glic50}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includesvg[width=\textwidth]{Images/beta_vs_tau_glic200.svg}
+        \caption{Non-Gaussianity parameter $\beta(\tau)$ for the sample with $18\%$ PEG and $40\%$ glycerol.}
+        \label{fig:beta_vs_tau_glic200}
+    \end{subfigure}
+
+    \caption{Behavior of the non-Gaussianity parameter $\beta$ as a function of the lag time $\tau$ for the two analyzed samples.}
+    \label{fig:beta_vs_tau}
+\end{figure}
+\FloatBarrier
+
+From the analysis of the van Hove distribution, we first conclude that the system is ergodic, confirming the results obtained from the previous analyses. In addition, the samples appear generally homogeneous and the diffusion is predominantly Brownian. Although there are some indications of slight sub-diffusive behavior, these deviations are not strong enough to support a firm conclusion that the system is truly sub-diffusive. Nevertheless, the second sample, which has a higher PEG concentration, exhibits more heterogeneous dynamics than the sample with lower PEG concentration.
+
+Note that the spikes visible in the distributions are mainly statistical artifacts, since they are influenced by the choice of histogram binning and by other factors such as the pixel size.
+
+One might argue that subtracting the drift artificially suppresses the sub-diffusive behavior. However, we performed several tests and found that the drift correction does not change our conclusions. Before drift correction, the distributions were indeed strongly non-Gaussian, with pronounced skewness and clear deviations from a Gaussian profile. If interpreted without correction, these results could be misinterpreted as evidence of ergodicity breaking, which is not consistent with the fractional Brownian motion expected for PEG-induced crowding. In reality, this apparent behavior is caused by the global drift, which increasingly dominates the dynamics at larger lag times $\tau$ and strongly biases the anomalous-diffusion analysis.
+
