@@ -14,8 +14,6 @@ This repository contains the full analysis workflow used for doctoral exam resul
 - `Data/14_11_anomalous/`: CSV trajectories for anomalous diffusion
 - `Results/no_anomalous/`: generated figures and fit outputs (normal diffusion)
 - `Results/anomalous/`: generated figures and fit outputs (anomalous diffusion)
-- `Docu/`: summary CSV tables used in the written analysis
-- `Latex/`: LaTeX source and figure references for the thesis/report
 
 ## Requirements
 Install dependencies in your Python environment:
@@ -80,10 +78,3 @@ Produces:
 - Use the same Python version and package set across runs.
 - Keep raw data unchanged in `Data/`.
 - Regenerate figures with scripts instead of manual edits.
-- For thesis consistency, verify that files referenced in `Latex/*.tex` exist in `Results/`.
-
-## Exam-delivery note
-A figure coverage checklist is available in:
-- `Docu/FIGURE_COVERAGE_CHECKLIST.md`
-
-This file reports the status of key figures used in the LaTeX report for both anomalous and non-anomalous analyses.
