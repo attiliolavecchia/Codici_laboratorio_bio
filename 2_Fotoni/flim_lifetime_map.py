@@ -113,20 +113,127 @@ _TAU_MAX_NS: float = 12.0   # upper bound ≈ laser period (ns)
 _TAU_BOUND_TOL: float = 0.1  # values within this tolerance of either bound are
                               # treated as boundary-hitting (degenerate) fits
 
+# Physical pixel size – used to draw the scale bar on saved images.
+# Resolution: 0.64 px/µm  →  pixel size = 1/0.64 = 1.5625 µm/px
+_PIXEL_SIZE_UM: float = 1.5625
+_SCALEBAR_UM:   float = 5.0    # default scale-bar length in µm
+
 
 # =============================================================================
 # Helper: colormap compatible with all matplotlib ≥ 3.2
 # =============================================================================
 
-def _get_cmap(name: str):
-    """Return a *copy* of the named colormap (compatible with mpl ≥ 3.2)."""
+def _get_cmap(name: str, lo_clip: float = 0.0):
+    """
+    Return a (optionally bottom-clipped) copy of the named colormap.
+
+    Parameters
+    ----------
+    name    : matplotlib colormap name.
+    lo_clip : fraction [0, 1) of the bottom of the colormap to remove.
+              E.g. 0.13 maps the lowest τ value to the 13th-percentile colour
+              of the original map instead of pure black.
+    """
     try:
-        # matplotlib ≥ 3.5
         cmap = matplotlib.colormaps[name].copy()
     except AttributeError:
         import copy
         cmap = copy.copy(plt.cm.get_cmap(name))
+
+    if lo_clip > 0.0:
+        from matplotlib.colors import LinearSegmentedColormap
+        cmap = LinearSegmentedColormap.from_list(
+            f"{name}_clipped",
+            cmap(np.linspace(lo_clip, 1.0, 256)),
+        )
     return cmap
+
+
+def _add_scalebar(
+    ax,
+    pixel_size_um: float,
+    bar_um: float = _SCALEBAR_UM,
+    color: str = "white",
+    lw: float = 2.0,
+    fontsize: float = 9,
+    loc: str = "top-left",
+) -> None:
+    """
+    Draw a scale bar inside the image axes.
+
+    The bar is drawn in axes-fraction coordinates so it sits inside the image
+    regardless of its pixel size.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes on which the image was plotted (must be called *after*
+        ``ax.imshow`` so that ``ax.get_xlim()`` reflects the image width).
+    pixel_size_um : float
+        Physical pixel size in µm (e.g. 1.5625 for 0.64 px/µm).
+    bar_um : float
+        Desired scale-bar length in µm (default: _SCALEBAR_UM).
+    color : str
+        Colour for the bar and label (default: ``"white"``).
+    lw : float
+        Line width in points.
+    fontsize : float
+        Font size for the µm label.
+    loc : str
+        Corner where the bar is placed: ``"top-left"``, ``"top-right"``,
+        ``"bottom-left"``, or ``"bottom-right"`` (default: ``"top-left"``).
+    """
+    from matplotlib.lines import Line2D
+
+    # Bar length in axes-fraction units
+    xlim = ax.get_xlim()
+    img_width_px = abs(xlim[1] - xlim[0])   # e.g. 64.0 for a 64-pixel image
+    bar_frac = (bar_um / pixel_size_um) / img_width_px
+
+    margin = 0.03   # gap between bar and image edge
+    tick_h = 0.020
+
+    # Horizontal position
+    if "left" in loc:
+        x_left  = margin
+        x_right = x_left + bar_frac
+    else:
+        x_right = 1.0 - margin
+        x_left  = x_right - bar_frac
+
+    # Vertical position; label goes below the bar line
+    if "top" in loc:
+        y_bar      = 1.0 - 0.055
+        label_va   = "top"
+        label_y    = y_bar - tick_h - 0.012
+    else:
+        y_bar      = 0.055
+        label_va   = "bottom"
+        label_y    = y_bar + tick_h + 0.012
+
+    trans = ax.transAxes
+
+    # Horizontal bar
+    ax.add_line(Line2D(
+        [x_left, x_right], [y_bar, y_bar],
+        transform=trans, color=color, lw=lw,
+        solid_capstyle="butt", zorder=5,
+    ))
+    # Vertical end ticks
+    for xp in (x_left, x_right):
+        ax.add_line(Line2D(
+            [xp, xp], [y_bar - tick_h, y_bar + tick_h],
+            transform=trans, color=color, lw=lw, zorder=5,
+        ))
+    # Text label (centred next to the bar)
+    ax.text(
+        (x_left + x_right) / 2, label_y,
+        f"{bar_um:.0f} µm",
+        transform=trans,
+        ha="center", va=label_va,
+        fontsize=fontsize, color=color,
+        zorder=5,
+    )
 
 
 # =============================================================================
@@ -330,6 +437,12 @@ def _percentile_range(
     return float(np.percentile(finite, lo)), float(np.percentile(finite, hi))
 
 
+# Fraction of the bottom of the colourmap that is clipped by default so
+# that the lowest-τ pixels never render as pure black (which is
+# indistinguishable from the darkened background outside the mask).
+_CMAP_LO_CLIP: float = 0.13
+
+
 def save_lifetime_plot(
     intensity: np.ndarray,
     tau_map: np.ndarray,
@@ -339,6 +452,10 @@ def save_lifetime_plot(
     vmax: float,
     title: str = "",
     dpi: int = 200,
+    pixel_size_um: float = _PIXEL_SIZE_UM,
+    scalebar_loc: str = "top-left",
+    mask: Optional[np.ndarray] = None,
+    cmap_lo_clip: float = _CMAP_LO_CLIP,
 ) -> None:
     """
     Save a single PNG: grayscale intensity background with a τ-map overlay.
@@ -348,27 +465,48 @@ def save_lifetime_plot(
 
     The overlay is built as an RGBA image where:
       - colour encodes τ (mapped through ``colormap``)
-      - alpha = 0.65 on valid pixels, 0.0 on NaN
+      - alpha = 0.85 on valid pixels, 0.35 on in-mask NaN, 0.0 outside
+
+    ``cmap_lo_clip`` (default 0.13) removes the darkest portion of the
+    colourmap so that the lowest-τ pixels render as visible dark violet
+    rather than pure black, making them distinguishable from the
+    (darkened) background outside the cell mask.
     This approach is compatible with all matplotlib ≥ 3.2 and avoids
     mutating the global colormap registry.
     """
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.axis("off")
 
-    # Grayscale intensity background
+    # Grayscale intensity background — darken the non-masked region so it
+    # is clearly distinct from the colourmap dark-end (near-black in inferno).
     ax.imshow(intensity, cmap="gray", interpolation="nearest")
+    if mask is not None:
+        # Semi-transparent black veil over background pixels
+        veil = np.zeros((*intensity.shape, 4), dtype=np.float32)
+        veil[~mask, 3] = 0.55          # 55 % black over background only
+        ax.imshow(veil, interpolation="nearest", zorder=1)
 
-    # Build RGBA overlay manually so NaN → alpha=0 (transparent)
+    # Build RGBA overlay manually with three alpha levels:
+    #   0.85  – valid fit pixel (coloured by τ)
+    #   0.35  – inside mask but fit unavailable (low counts / failed);
+    #           rendered at vmin colour so it reads as "low / uncertain τ"
+    #           rather than a hole in the data.
+    #   0.0   – outside mask (background shows through the veil)
     norm    = mcolors.Normalize(vmin=vmin, vmax=vmax, clip=True)
-    cmap_fn = _get_cmap(colormap)
+    cmap_fn = _get_cmap(colormap, lo_clip=cmap_lo_clip)
     tau_rgba = cmap_fn(norm(np.nan_to_num(tau_map, nan=vmin)))  # (H, W, 4)
-    # Hard edge: alpha = 0.85 on valid pixels, 0.0 outside the mask.
-    tau_rgba[:, :, 3] = np.where(np.isfinite(tau_map), 0.85, 0.0)
 
-    im = ax.imshow(tau_rgba, interpolation="nearest")
+    valid   = np.isfinite(tau_map)
+    in_mask = mask if mask is not None else valid
 
-    # Colorbar — attach a ScalarMappable so the bar shows the τ scale
-    sm = plt.cm.ScalarMappable(cmap=_get_cmap(colormap), norm=norm)
+    alpha = np.where(valid, 0.85,
+                     np.where(in_mask, 0.35, 0.0))
+    tau_rgba[:, :, 3] = alpha
+
+    im = ax.imshow(tau_rgba, interpolation="nearest", zorder=2)
+
+    # Colorbar — use the same clipped colormap so colours match the image
+    sm = plt.cm.ScalarMappable(cmap=_get_cmap(colormap, lo_clip=cmap_lo_clip), norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label("τ (ns)", fontsize=11)
@@ -377,6 +515,8 @@ def save_lifetime_plot(
     if title:
         ax.set_title(title, fontsize=8, pad=4)
 
+    # Scale bar inside the image
+    _add_scalebar(ax, pixel_size_um, loc=scalebar_loc)
     fig.tight_layout(pad=0.5)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
@@ -453,6 +593,8 @@ def process_tiff_lifetime_map(
     fit_start_ns: Optional[float] = None,
     fit_end_ns: Optional[float] = None,
     tau_max_ns: float = 12.0,
+    pixel_size_um: float = _PIXEL_SIZE_UM,
+    scalebar_loc: str = "top-left",
 ) -> dict:
     """Full lifetime-map pipeline for one TIFF stack."""
     sep = "═" * 65
@@ -509,6 +651,7 @@ def process_tiff_lifetime_map(
     ax_m.axis("off")
     ax_m.imshow(mask, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
     #ax_m.set_title(f"Otsu mask  (thr={otsu_thr:.3g},  {n_mask} px)", fontsize=8)
+    _add_scalebar(ax_m, pixel_size_um, loc=scalebar_loc)
     fig_m.tight_layout(pad=0.3)
     _mask_path = output_dir / f"{_stem_early}_otsu_mask.png"
     fig_m.savefig(_mask_path, dpi=200, bbox_inches="tight")
@@ -526,6 +669,7 @@ def process_tiff_lifetime_map(
     _overlay[:, :, 1] = _grn_ch
     ax_o.imshow(np.clip(_overlay, 0, 1), interpolation="nearest")
     #ax_o.set_title("green = fitted  |  red = excluded", fontsize=8)
+    _add_scalebar(ax_o, pixel_size_um, loc=scalebar_loc)
     fig_o.tight_layout(pad=0.3)
     _overlay_path = output_dir / f"{_stem_early}_otsu_mask_overlay.png"
     fig_o.savefig(_overlay_path, dpi=200, bbox_inches="tight")
@@ -663,6 +807,9 @@ def process_tiff_lifetime_map(
             colormap=cmap,
             vmin=vmin,
             vmax=vmax,
+            pixel_size_um=pixel_size_um,
+            scalebar_loc=scalebar_loc,
+            mask=mask,
         )
 
     # ── 11b. Lifetime histograms (one PNG per quantity) ───────────────────
@@ -798,6 +945,16 @@ def main() -> None:
         help="Upper bound on τ for bi-exponential fitting in ns (default: 12.0). "
              "Tighten to reduce outliers in τ₂, e.g. --tau-max-ns 6 for DAPI in cells",
     )
+    parser.add_argument(
+        "--pixel-size", type=float, default=_PIXEL_SIZE_UM,
+        help=f"Physical pixel size in µm used to draw the scale bar "
+             f"(default: {_PIXEL_SIZE_UM} µm/px = 0.64 px/µm)",
+    )
+    parser.add_argument(
+        "--scalebar-loc", type=str, default="top-left",
+        choices=["top-left", "top-right", "bottom-left", "bottom-right"],
+        help="Corner of the image where the scale bar is placed (default: top-left)",
+    )
 
     args = parser.parse_args()
 
@@ -816,6 +973,8 @@ def main() -> None:
         fit_start_ns=args.fit_start_ns,
         fit_end_ns=args.fit_end_ns,
         tau_max_ns=args.tau_max_ns,
+        pixel_size_um=args.pixel_size,
+        scalebar_loc=args.scalebar_loc,
     )
 
     input_path = Path(args.input)

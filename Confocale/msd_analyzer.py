@@ -144,7 +144,7 @@ def calculate_ensemble_msd(
     *,
     max_lag_fraction: Optional[float] = None,
     global_dt: Optional[float] = None,
-    drift_corrected: bool = True,
+    drift_corrected: bool = False,
 ) -> MSDResult:
     """Compute the 2D ensemble-averaged MSD as a function of lag time τ.
 

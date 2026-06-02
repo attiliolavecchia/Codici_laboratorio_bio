@@ -129,6 +129,16 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
     # Use drift correction for anomalous datasets
     use_drift_corr = (label == "anomalous")
 
+    # For the anomalous dataset also save raw (uncorrected) plots for comparison
+    if use_drift_corr:
+        eamsd_raw_dir = SCRIPT_DIR / "Results" / label / "eamsd_raw"
+        tamsd_raw_dir = SCRIPT_DIR / "Results" / label / "tamsd_raw"
+        eamsd_raw_dir.mkdir(parents=True, exist_ok=True)
+        tamsd_raw_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        eamsd_raw_dir = None
+        tamsd_raw_dir = None
+
     global_dt = None  # inferred lazily by compute_ensemble_tamsd
 
     for frac in LAG_FRACTIONS:
@@ -149,6 +159,20 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
         except Exception as e:
             print(f"    eamsd {pct:3d}% FAILED: {e}")
 
+        if eamsd_raw_dir is not None:
+            try:
+                ea_raw = calculate_ensemble_msd(
+                    trajectories, max_lag_fraction=frac,
+                    drift_corrected=False,
+                )
+                if ea_raw.tau.size > 0:
+                    out = eamsd_raw_dir / f"{stem}_eamsd_{tag}.svg"
+                    plot_and_save(ea_raw.tau, ea_raw.msd, out, msd_sem=ea_raw.msd_sem,
+                                  label="EA-MSD (raw)", color="C0")
+                    print(f"    eamsd_raw {pct:3d}% OK")
+            except Exception as e:
+                print(f"    eamsd_raw {pct:3d}% FAILED: {e}")
+
         # TA-MSD — ensemble average over all tracks (SEM = std / sqrt(N_tracks))
         try:
             tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
@@ -162,6 +186,20 @@ def run_msd_plots(csv_file: Path, label: str) -> None:
                 print(f"    tamsd {pct:3d}% OK")
         except Exception as e:
             print(f"    tamsd {pct:3d}% FAILED: {e}")
+
+        if tamsd_raw_dir is not None:
+            try:
+                tau_ta_raw, msd_ta_raw, sem_ta_raw, _ = compute_ensemble_tamsd(
+                    trajectories, max_lag_fraction=frac,
+                    drift_corrected=False,
+                )
+                if tau_ta_raw.size > 0:
+                    out = tamsd_raw_dir / f"{stem}_tamsd_{tag}.svg"
+                    plot_and_save(tau_ta_raw, msd_ta_raw, out, msd_sem=sem_ta_raw,
+                                  label="⟨TA-MSD⟩ (raw)", color="C1")
+                    print(f"    tamsd_raw {pct:3d}% OK")
+            except Exception as e:
+                print(f"    tamsd_raw {pct:3d}% FAILED: {e}")
 
 
 def run_fits(csv_file: Path, label: str) -> list[dict]:

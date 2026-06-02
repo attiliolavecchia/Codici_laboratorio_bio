@@ -203,12 +203,12 @@ def plot_d_comparison(labels, d_ea, d_ea_err, d_ta, d_ta_err):
 
     # EA-MSD points
     ax.errorbar(x, d_ea, yerr=d_ea_err, fmt="o", color="C0",
-                capsize=4, capthick=1.2, markersize=8, label="EA-MSD",
+                capsize=4, capthick=1.2, markersize=8, label=r"$D_\mathrm{ea}$",
                 zorder=3)
     # ⟨TA-MSD⟩ points
     ax.errorbar(x, d_ta, yerr=d_ta_err, fmt="o", color="C3",
                 capsize=4, capthick=1.2, markersize=8,
-                label=r"$\langle$TA-MSD$\rangle$", zorder=3)
+                label=r"$D_\mathrm{ta}$", zorder=3)
 
     ax.set_xticks(x)
     ax.set_xticklabels([f"Experiment {i+1}" for i in range(n)], fontsize=10)

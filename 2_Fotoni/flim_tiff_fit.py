@@ -144,6 +144,88 @@ from flim_exponential_fit import (
 # Default output directory for TIFF-based FLIM analysis
 OUTPUT_DIR = Path(__file__).parent / "img" / "Batteri"
 
+# Physical pixel size – used to draw the scale bar on saved images.
+# Resolution: 0.64 px/µm  →  pixel size = 1/0.64 = 1.5625 µm/px
+_PIXEL_SIZE_UM: float = 1.5625
+_SCALEBAR_UM:   float = 5.0    # default scale-bar length in µm
+
+
+# =============================================================================
+# Scale-bar helper
+# =============================================================================
+
+def _add_scalebar(
+    ax,
+    pixel_size_um: float,
+    bar_um: float = _SCALEBAR_UM,
+    color: str = "white",
+    lw: float = 2.0,
+    fontsize: float = 9,
+    loc: str = "top-left",
+) -> None:
+    """Draw a scale bar inside the image axes at the chosen corner."""
+    from matplotlib.lines import Line2D
+
+    xlim = ax.get_xlim()
+    img_width_px = abs(xlim[1] - xlim[0])
+    bar_frac = (bar_um / pixel_size_um) / img_width_px
+
+    margin = 0.03
+    tick_h = 0.020
+
+    if "left" in loc:
+        x_left  = margin
+        x_right = x_left + bar_frac
+    else:
+        x_right = 1.0 - margin
+        x_left  = x_right - bar_frac
+
+    if "top" in loc:
+        y_bar    = 1.0 - 0.055
+        label_va = "top"
+        label_y  = y_bar - tick_h - 0.012
+    else:
+        y_bar    = 0.055
+        label_va = "bottom"
+        label_y  = y_bar + tick_h + 0.012
+
+    trans = ax.transAxes
+    ax.add_line(Line2D(
+        [x_left, x_right], [y_bar, y_bar],
+        transform=trans, color=color, lw=lw, solid_capstyle="butt", zorder=5,
+    ))
+    for xp in (x_left, x_right):
+        ax.add_line(Line2D(
+            [xp, xp], [y_bar - tick_h, y_bar + tick_h],
+            transform=trans, color=color, lw=lw, zorder=5,
+        ))
+    ax.text(
+        (x_left + x_right) / 2, label_y,
+        f"{bar_um:.0f} µm",
+        transform=trans, ha="center", va=label_va,
+        fontsize=fontsize, color=color, zorder=5,
+    )
+
+
+def _save_img_with_scalebar(
+    arr: np.ndarray,
+    output_path: Path,
+    pixel_size_um: float,
+    scalebar_loc: str = "top-left",
+    cmap: str = "gray",
+    vmin=None,
+    vmax=None,
+    dpi: int = 200,
+) -> None:
+    """Save a 2-D array as PNG with a white scale bar overlay."""
+    fig, ax = plt.subplots(figsize=(5, 5), dpi=dpi)
+    ax.axis("off")
+    ax.imshow(arr, cmap=cmap, interpolation="nearest", vmin=vmin, vmax=vmax)
+    _add_scalebar(ax, pixel_size_um, loc=scalebar_loc)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
 
 # =============================================================================
 # TIFF reading
@@ -594,6 +676,8 @@ def process_tiff(
     hot_pixel_k: float = 5.0,
     trim_artifacts: bool = True,
     artifact_spike_factor: float = 2.5,
+    pixel_size_um: float = _PIXEL_SIZE_UM,
+    scalebar_loc: str = "top-left",
 ) -> dict:
     """Read one TIFF, run fit(s), save outputs, and return extracted lifetimes."""
     print(f"\nReading FLIM TIFF stack: {tiff_path}")
@@ -627,9 +711,26 @@ def process_tiff(
         den_png = output_dir / f"{input_stem_clean}_intensity_denoised.png"
         msk_png = output_dir / f"{input_stem_clean}_mask.png"
         msk_tif = output_dir / f"{input_stem_clean}_intensity_masked.tif"
+        # Plain originals (no scale bar) – kept for compatibility / further analysis
         plt.imsave(raw_png, artifacts.intensity_raw, cmap="gray")
         plt.imsave(den_png, artifacts.intensity_denoised, cmap="gray")
         plt.imsave(msk_png, artifacts.mask.astype(np.uint8), cmap="gray", vmin=0, vmax=1)
+        # Annotated copies with scale bar (suffix _annotated, same convention as annotate_images.py)
+        _save_img_with_scalebar(
+            artifacts.intensity_raw,
+            raw_png.with_name(raw_png.stem + "_annotated" + raw_png.suffix),
+            pixel_size_um, scalebar_loc,
+        )
+        _save_img_with_scalebar(
+            artifacts.intensity_denoised,
+            den_png.with_name(den_png.stem + "_annotated" + den_png.suffix),
+            pixel_size_um, scalebar_loc,
+        )
+        _save_img_with_scalebar(
+            artifacts.mask.astype(np.uint8),
+            msk_png.with_name(msk_png.stem + "_annotated" + msk_png.suffix),
+            pixel_size_um, scalebar_loc, vmin=0, vmax=1,
+        )
         tifffile.imwrite(str(msk_tif), artifacts.intensity_masked.astype(np.float32))
         stk_tif = output_dir / f"{input_stem_clean}_stack_denoised.tif"
         save_denoised_stack(artifacts, stk_tif)
@@ -781,6 +882,16 @@ def main() -> None:
     parser.add_argument("--artifact-spike-factor", type=float, default=2.5,
                         help="A frame is flagged as artifact when its mean exceeds "
                              "this factor times the local background (default: 2.5)")
+    parser.add_argument(
+        "--pixel-size", type=float, default=_PIXEL_SIZE_UM,
+        help=f"Physical pixel size in µm used to draw the scale bar on saved images "
+             f"(default: {_PIXEL_SIZE_UM} µm/px = 0.64 px/µm)",
+    )
+    parser.add_argument(
+        "--scalebar-loc", type=str, default="top-left",
+        choices=["top-left", "top-right", "bottom-left", "bottom-right"],
+        help="Corner of the image where the scale bar is placed (default: top-left)",
+    )
 
     args = parser.parse_args()
 
@@ -793,6 +904,8 @@ def main() -> None:
         hot_pixel_k=args.hot_pixel_k,
         trim_artifacts=not args.no_trim,
         artifact_spike_factor=args.artifact_spike_factor,
+        pixel_size_um=args.pixel_size,
+        scalebar_loc=args.scalebar_loc,
     )
     summary_name = "lifetime_summary_denoised.csv" if args.denoise else "lifetime_summary.csv"
 

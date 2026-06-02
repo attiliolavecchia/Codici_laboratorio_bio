@@ -125,18 +125,18 @@ def analyse_file(csv_path: Path):
 
     global_dt = estimate_global_time_step(trajectories)
 
-    # EA-MSD (drift-corrected, variance method)
+    # EA-MSD (no drift correction)
     ea = calculate_ensemble_msd(
         trajectories, max_lag_fraction=MSD_LAG_FRACTION,
-        global_dt=global_dt, drift_corrected=True,
+        global_dt=global_dt, drift_corrected=False,
     )
     if ea.tau.size < 4:
         return None
 
-    # ⟨TA-MSD⟩ (drift-corrected, ensemble-drift subtraction)
+    # ⟨TA-MSD⟩ (no drift correction)
     tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
         trajectories, max_lag_fraction=MSD_LAG_FRACTION,
-        global_dt=global_dt, drift_corrected=True,
+        global_dt=global_dt, drift_corrected=False,
     )
 
     # Common τ-range
