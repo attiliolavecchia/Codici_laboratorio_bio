@@ -16,6 +16,7 @@ Dataset: non-anomalous only (Data/31_10_no_anomalous)
 Output (SVG for paper, CSV for data):
     Results/no_anomalous/diffusion_statistics/   — histograms, comparison plot
     Results/no_anomalous/linear_offset_fits/     — linear+offset fit plots
+    Results/no_anomalous/tamsd_per_track_linear_offset_fits/ — per-track taMSD linear+offset fit plots
     Results/no_anomalous/nonlinear_fits/         — per-track nonlinear fit plots
     Results/no_anomalous/residuals/              — residual diagnostics plots
     Docu/diffusion_statistics_results.csv        — tabular results
@@ -54,6 +55,9 @@ DATA_DIR = SCRIPT_DIR / "Data" / "31_10_no_anomalous"
 STATS_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "diffusion_statistics"
 LINEAR_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "linear_fits"
 LINEAR_OFFSET_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "linear_offset_fits"
+TAMSD_TRACK_LINEAR_OFFSET_DIR = (
+    SCRIPT_DIR / "Results" / "no_anomalous" / "tamsd_per_track_linear_offset_fits"
+)
 NONLINEAR_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "nonlinear_fits"
 RESIDUALS_DIR = SCRIPT_DIR / "Results" / "no_anomalous" / "residuals"
 DOC_DIR = SCRIPT_DIR / "Docu"
@@ -244,6 +248,23 @@ def extract_per_track_D(csv_files):
                         "offset": fit_lo.offset,
                         "offset_error": fit_lo.offset_error,
                     })
+
+                    tag = f"f{pct:03d}"
+                    txt_lines = [
+                        r"$D = (%.2e \pm %.1e)\ \mu m^2/s$" % (fit_lo.D, fit_lo.D_error),
+                        r"$c = (%.2e \pm %.1e)\ \mu m^2$" % (fit_lo.offset, fit_lo.offset_error),
+                        r"$\chi^2_\nu = %.4f$" % fit_lo.chi_squared_red,
+                    ]
+                    _save_fit_plot(
+                        fit_lo.tau_fit, fit_lo.msd_fit, fit_lo.msd_predicted,
+                        "\n".join(txt_lines),
+                        r"Linear+offset: MSD = 4D$\tau$ + $c$",
+                        TAMSD_TRACK_LINEAR_OFFSET_DIR / f"{stem}_track{tid}_tamsd_linear_offset_{tag}.svg",
+                        fit_lo.msd_sigma_fit,
+                        data_color="C2",
+                        msd_kind="taMSD",
+                        text_below_legend=True,
+                    )
                 except (ValueError, RuntimeError):
                     pass
 
@@ -910,7 +931,15 @@ def main():
     args = parse_args()
 
     # Create output dirs
-    for d in (STATS_DIR, LINEAR_DIR, LINEAR_OFFSET_DIR, NONLINEAR_DIR, RESIDUALS_DIR, DOC_DIR):
+    for d in (
+        STATS_DIR,
+        LINEAR_DIR,
+        LINEAR_OFFSET_DIR,
+        TAMSD_TRACK_LINEAR_OFFSET_DIR,
+        NONLINEAR_DIR,
+        RESIDUALS_DIR,
+        DOC_DIR,
+    ):
         d.mkdir(parents=True, exist_ok=True)
 
     # D_theory in µm²/s
@@ -940,6 +969,7 @@ def main():
 
     # Phase A: generate fit plots for ALL non-anomalous CSV files.
     # (Requested: do not limit fit generation to 40minstep only.)
+    df_tamsd_all = extract_per_track_D(all_csv)
     df_eamsd_all = extract_per_file_D(all_csv)
     df_ens_tamsd_all = extract_ensemble_tamsd_D(all_csv)
     analyze_linear_offset_residuals(all_csv)
@@ -950,10 +980,13 @@ def main():
         print("Fit plots and residual diagnostics were still generated for all CSV files.")
         return
 
-    # Phase B: per-track taMSD D_i (independent subset only)
-    df_tamsd = extract_per_track_D(csv_files_independent)
-
     independent_stems = {f.stem for f in csv_files_independent}
+    # Phase B: per-track taMSD D_i (independent subset only for statistics)
+    if (not df_tamsd_all.empty) and ("file" in df_tamsd_all.columns):
+        df_tamsd = df_tamsd_all[df_tamsd_all["file"].isin(independent_stems)].copy()
+    else:
+        df_tamsd = pd.DataFrame(columns=["file", "model", "fraction", "D"])
+
     if (not df_eamsd_all.empty) and ("file" in df_eamsd_all.columns):
         df_eamsd = df_eamsd_all[df_eamsd_all["file"].isin(independent_stems)].copy()
     else:

@@ -45,6 +45,7 @@
 !/Confocale/andi_sim.ipynb
 !/Confocale/run.py
 !/Confocale/compare_drift_correction.py
+!/Confocale/simulations/
 
 
 #!/2_Fotoni/flim_data_reader.py
