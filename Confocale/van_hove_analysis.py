@@ -376,7 +376,7 @@ def main():
     args = parser.parse_args()
 
     #drift_corrected = not args.no_drift_correction
-    drift_corrected = False # Force drift correction for better results, as per user request.
+    drift_corrected = True # Force drift correction for better results, as per user request.
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     DOC_DIR.mkdir(parents=True, exist_ok=True)

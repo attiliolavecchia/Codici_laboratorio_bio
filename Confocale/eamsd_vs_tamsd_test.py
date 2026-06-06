@@ -69,12 +69,8 @@ GLIC200_SUBDIR = "PEG_18_Glicerolo_40_H2O_42"
 # fit is then restricted to FIT_FRACTIONS of this curve.
 MSD_LAG_FRACTION = 0.50
 FIT_FRACTIONS = [0.10, 0.25]
-DRIFT_CORRECTED = True
-# Show median curves only where at least this many files contribute.
-# This avoids edge artifacts at the first lag when only a few files are valid.
-MIN_VALID_FILES_FOR_MEDIAN = 4
-# Show only an early-lag window around the fit region to improve readability.
-PLOT_WINDOW_FACTOR = 1.6
+# Use median points only where at least N files contribute on both estimators.
+MIN_VALID_FILES_FOR_MEDIAN = 3
 
 
 # ── Plot style helpers ────────────────────────────────────────────────
@@ -131,18 +127,18 @@ def analyse_file(csv_path: Path):
 
     global_dt = estimate_global_time_step(trajectories)
 
-    # EA-MSD (drift-corrected)
+    # EA-MSD (no drift correction)
     ea = calculate_ensemble_msd(
         trajectories, max_lag_fraction=MSD_LAG_FRACTION,
-        global_dt=global_dt, drift_corrected=DRIFT_CORRECTED,
+        global_dt=global_dt, drift_corrected=True,
     )
     if ea.tau.size < 4:
         return None
 
-    # ⟨TA-MSD⟩ (drift-corrected with common-mode ensemble drift)
+    # ⟨TA-MSD⟩ (no drift correction)
     tau_ta, msd_ta, sem_ta, _ = compute_ensemble_tamsd(
         trajectories, max_lag_fraction=MSD_LAG_FRACTION,
-        global_dt=global_dt, drift_corrected=DRIFT_CORRECTED,
+        global_dt=global_dt, drift_corrected=True,
     )
 
     # Common τ-range
@@ -194,29 +190,14 @@ def plot_loglog_overlay(group_name, results, frac, out_path):
     with the fit range highlighted."""
     fig, ax = plt.subplots(figsize=(8.2, 6.0))
     fig.patch.set_facecolor("white")
-    _apply_clean_axes_style(ax, log_grid=False)
-
-    # Fit-range shading: the largest τ used at this frac, taken from the
-    # longest curve (gives a representative band).
-    long_idx = int(np.argmax([len(r["tau"]) for r in results]))
-    longest_tau = results[long_idx]["tau"]
-    n_fit = max(int(np.floor(frac * len(longest_tau))), 4)
-    tau_fit_max = longest_tau[n_fit - 1]
-    tau_fit_min = longest_tau[0]
-
-    # Do not show the entire tail: keep a zoomed window near the fit region.
-    tau_plot_max = tau_fit_max * PLOT_WINDOW_FACTOR
+    _apply_clean_axes_style(ax, log_grid=True)
 
     for r in results:
-        m = (r["tau"] >= tau_fit_min) & (r["tau"] <= tau_plot_max)
-        ax.plot(r["tau"][m], r["ea_msd"][m], color="C0", alpha=0.30, lw=1.1)
-        ax.plot(r["tau"][m], r["ta_msd"][m], color="C3", alpha=0.30, lw=1.1)
+        ax.loglog(r["tau"], r["ea_msd"], color="C0", alpha=0.30, lw=1.1)
+        ax.loglog(r["tau"], r["ta_msd"], color="C3", alpha=0.30, lw=1.1)
 
     # Median across files on a common log-spaced grid
-    tau_all = np.unique(np.concatenate([
-        r["tau"][(r["tau"] >= tau_fit_min) & (r["tau"] <= tau_plot_max)]
-        for r in results
-    ]))
+    tau_all = np.unique(np.concatenate([r["tau"] for r in results]))
     tau_all = tau_all[tau_all > 0]
     ea_stack, ta_stack = [], []
     for r in results:
@@ -226,19 +207,35 @@ def plot_loglog_overlay(group_name, results, frac, out_path):
                                   left=np.nan, right=np.nan))
     ea_stack = np.vstack(ea_stack)
     ta_stack = np.vstack(ta_stack)
+    ea_med = np.nanmedian(ea_stack, axis=0)
+    ta_med = np.nanmedian(ta_stack, axis=0)
 
-    # Keep only lags where enough files contribute to BOTH estimators.
+    # Remove edge points where too few files contribute, which can create
+    # a visual jump at the beginning of the median curves.
     min_valid = min(MIN_VALID_FILES_FOR_MEDIAN, len(results))
-    n_valid_both = np.sum(np.isfinite(ea_stack) & np.isfinite(ta_stack), axis=0)
-    valid_cols = n_valid_both >= min_valid
+    valid_counts = np.minimum(
+        np.sum(np.isfinite(ea_stack), axis=0),
+        np.sum(np.isfinite(ta_stack), axis=0),
+    )
+    support_mask = valid_counts >= min_valid
+    if np.any(support_mask):
+        tau_plot = tau_all[support_mask]
+        ea_med_plot = ea_med[support_mask]
+        ta_med_plot = ta_med[support_mask]
+    else:
+        tau_plot = tau_all
+        ea_med_plot = ea_med
+        ta_med_plot = ta_med
+    ax.loglog(tau_plot, ea_med_plot, color="C0", lw=2.7, label="EA-MSD (median)")
+    ax.loglog(tau_plot, ta_med_plot, color="C3", lw=2.7, label=r"$\langle$TA-MSD$\rangle$ (median)")
 
-    tau_med = tau_all[valid_cols]
-    ea_med = np.nanmedian(ea_stack[:, valid_cols], axis=0)
-    ta_med = np.nanmedian(ta_stack[:, valid_cols], axis=0)
-
-    ax.plot(tau_med, ea_med, color="C0", lw=2.7, label="EA-MSD (median)")
-    ax.plot(tau_med, ta_med, color="C3", lw=2.7, label=r"$\langle$TA-MSD$\rangle$ (median)")
-
+    # Fit-range shading: the largest τ used at this frac, taken from the
+    # longest curve (gives a representative band).
+    long_idx = int(np.argmax([len(r["tau"]) for r in results]))
+    longest_tau = results[long_idx]["tau"]
+    n_fit = max(int(np.floor(frac * len(longest_tau))), 4)
+    tau_fit_max = longest_tau[n_fit - 1]
+    tau_fit_min = longest_tau[0]
     ax.axvspan(tau_fit_min, tau_fit_max, color="#94a3b8", alpha=0.18,
                label=f"Fit range ({int(frac*100)}%)")
 
@@ -264,18 +261,6 @@ def plot_loglog_overlay(group_name, results, frac, out_path):
 
     ax.set_xlabel(r"Lag time $\tau$ [s]", fontsize=12)
     ax.set_ylabel(r"MSD [$\mu$m$^2$]", fontsize=12)
-    # Match the linear scale used in linear_offset_fits-style plots.
-    ax.set_xscale("linear")
-    ax.set_yscale("linear")
-    ax.set_xlim(tau_fit_min * 0.95, tau_plot_max)
-
-    y_pool = np.concatenate([ea_med[np.isfinite(ea_med)], ta_med[np.isfinite(ta_med)]])
-    if y_pool.size:
-        y_min = np.min(y_pool)
-        y_max = np.max(y_pool)
-        if np.isfinite(y_min) and np.isfinite(y_max) and y_max > y_min:
-            pad = 0.12 * (y_max - y_min)
-            ax.set_ylim(max(0.0, y_min - pad), y_max + pad)
     ax.legend(loc="lower right", fontsize=10, framealpha=0.95,
               facecolor="white", edgecolor="#cbd5e1")
     plt.tight_layout()
@@ -436,8 +421,6 @@ def main():
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     DOC_DIR.mkdir(parents=True, exist_ok=True)
-
-    print(f"Drift correction enabled: {DRIFT_CORRECTED}")
 
     files_by_group = group_csv_files(DATA_DIR)
     selected = (["glic50", "glic200"] if args.group == "all" else [args.group])
