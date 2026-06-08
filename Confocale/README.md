@@ -68,6 +68,28 @@ Produces:
 - per-file and per-track summary tables
 - linear vs nonlinear model comparison
 
+### 6) Interactive demos for presentations (offline)
+
+Run from `Confocale/simulations/`:
+
+```bash
+python run.py
+```
+
+Windows launcher scripts are also available:
+
+- `simulations/launch_andi_demo.bat`
+
+Both launchers automatically try `.venv/Scripts/python.exe` in the project root,
+then fall back to system `python`.
+
+In this integrated app, Van Hove is computed live from the same simulated
+trajectories used for eaMSD and taMSD.
+
+PowerPoint linking tip (offline):
+- Insert a hyperlink to one of the `.bat` files above.
+- During presentation, click the link from the slide to open the interactive demo.
+
 ## Models used
 - Linear: `MSD = 4 D tau`
 - Linear + drift: `MSD = 4 D tau + v^2 tau^2`

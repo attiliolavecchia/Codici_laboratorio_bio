@@ -30,7 +30,8 @@ def _(mo):
         # AnDi – Interactive Diffusion Demo
 
         Simulate diffusive trajectories, scrub through time with the frame slider,
-        and watch how **taMSD** and **eaMSD** change with the model parameters.
+        and watch how **taMSD**, **eaMSD**, and **Van Hove** distribution change
+        with the model parameters.
 
         | Symbol | Meaning |
         |--------|---------|
@@ -61,7 +62,16 @@ def _(mo):
     n_frames = mo.ui.slider(50, 1500, value=300, step=50, label="Simulate T frames", show_value=True)
     box_size = mo.ui.slider(64, 384, value=192, step=16, label="Box size L (px)", show_value=True)
     max_lag_frac = mo.ui.slider(0.1, 1.0, value=0.3, step=0.05, label="Max lag (fraction of T)", show_value=True)
-    return box_size, max_lag_frac, model, n_frames, n_traj
+    vh_lag_frac = mo.ui.slider(
+        0.02,
+        0.50,
+        value=0.15,
+        step=0.01,
+        label="Van Hove lag (fraction of current frame)",
+        show_value=True,
+    )
+    vh_bins = mo.ui.slider(30, 180, value=90, step=10, label="Van Hove bins", show_value=True)
+    return box_size, max_lag_frac, model, n_frames, n_traj, vh_bins, vh_lag_frac
 
 
 @app.cell
@@ -143,7 +153,7 @@ def _(
     box_size, d_conf, d_free, d_scale,
     d_trap, is_playing, max_lag_frac, model, mo, n_comp, n_frames, n_traj,
     frame_tick,
-    r_comp, seek_slider, trans, trap_r, trap_nt, trap_pu, trap_pb,
+    r_comp, seek_slider, trans, trap_r, trap_nt, trap_pu, trap_pb, vh_bins, vh_lag_frac,
 ):
     _info = {
         "bm": mo.callout(
@@ -199,6 +209,9 @@ def _(
             mo.md("### ⏱ Frame control"),
             mo.hstack([is_playing, frame_tick], gap=0.5),
             seek_slider,
+            mo.md("### 📊 Van Hove"),
+            vh_lag_frac,
+            vh_bins,
         ], gap=0.3),
     ], widths=[1])
     return
@@ -270,7 +283,7 @@ def _(
 
 # ── MSD COMPUTATION (re-runs on every frame advance) ─────────────────────────
 @app.cell
-def _(T, get_frame, max_lag_frac, msd_analysis, np, traj_nt2):
+def _(T, get_frame, max_lag_frac, msd_analysis, np, traj_nt2, vh_lag_frac):
     # Compute MSD only up to the current frame so the plot evolves in real time.
     _frame = max(4, min(int(get_frame()), T))
     _traj = traj_nt2[:, :_frame, :]
@@ -303,9 +316,36 @@ def _(T, get_frame, max_lag_frac, msd_analysis, np, traj_nt2):
     # Keep this computation here for easy re-enable later.
     # eb = np.nanmean(tamsd ** 2, axis=1) / (np.nanmean(tamsd, axis=1) ** 2) - 1.0
 
+    # Live Van Hove from the currently visible simulated trajectory segment.
+    vh_lag_steps = max(1, min(int(round(_frame * float(vh_lag_frac.value))), _frame - 1))
+    vh_dx = _traj[:, vh_lag_steps:, 0] - _traj[:, :-vh_lag_steps, 0]
+    vh_dy = _traj[:, vh_lag_steps:, 1] - _traj[:, :-vh_lag_steps, 1]
+    vh_dx = np.asarray(vh_dx, dtype=float).ravel()
+    vh_dy = np.asarray(vh_dy, dtype=float).ravel()
+    _finite = np.isfinite(vh_dx) & np.isfinite(vh_dy)
+    vh_dx = vh_dx[_finite]
+    vh_dy = vh_dy[_finite]
+    vh_n_jumps = int(vh_dx.size)
+
+    if vh_n_jumps > 1:
+        _r2 = vh_dx * vh_dx + vh_dy * vh_dy
+        _mean_r2 = float(np.mean(_r2))
+        _mean_r4 = float(np.mean(_r2 * _r2))
+        vh_beta = float(_mean_r4 / (2.0 * _mean_r2 * _mean_r2) - 1.0) if _mean_r2 > 0 else float("nan")
+        _var_dx = float(np.var(vh_dx, ddof=0))
+        if _var_dx > 0:
+            _m4x = float(np.mean((vh_dx - float(np.mean(vh_dx))) ** 4))
+            vh_kurt_dx = float(_m4x / (_var_dx * _var_dx) - 3.0)
+        else:
+            vh_kurt_dx = float("nan")
+    else:
+        vh_beta = float("nan")
+        vh_kurt_dx = float("nan")
+
     return (
         alpha_ea, alpha_ta, alpha_ta_std,
         eamsd, t_lags, tamsd, tamsd_mean,
+        vh_beta, vh_dx, vh_kurt_dx, vh_lag_steps, vh_n_jumps,
     )
 
 
@@ -381,7 +421,8 @@ def _(
 def _(
     alpha_ea, alpha_ta, alpha_ta_std,
     eamsd,
-    go, model, mo, t_lags, tamsd, tamsd_mean,
+    go, model, mo, np, t_lags, tamsd, tamsd_mean,
+    vh_beta, vh_bins, vh_dx, vh_kurt_dx, vh_lag_steps, vh_n_jumps,
 ):
     # ── Figure 1: taMSD & eaMSD ──────────────────────────────────────────────
     _fig_msd = go.Figure()
@@ -437,7 +478,52 @@ def _(
     #     margin={"l": 55, "r": 130, "t": 55, "b": 45},
     # )
 
-    _out = mo.vstack([_fig_msd])
+    # ── Figure 2: Van Hove distribution from the same simulated data ───────
+    _fig_vh = go.Figure()
+    if vh_n_jumps > 1:
+        _q = float(np.nanpercentile(np.abs(vh_dx), 99.5))
+        if (not np.isfinite(_q)) or _q <= 0:
+            _q = float(np.nanmax(np.abs(vh_dx))) if vh_dx.size else 1.0
+        _q = max(_q, 1e-8)
+
+        _n_bins = int(vh_bins.value)
+        _bins = np.linspace(-_q, _q, _n_bins + 1)
+        _hist, _edges = np.histogram(vh_dx, bins=_bins, density=True)
+        _centers = 0.5 * (_edges[:-1] + _edges[1:])
+
+        _fig_vh.add_trace(go.Scatter(
+            x=_centers, y=_hist, mode="lines",
+            name="Gs(Delta x, tau)",
+            line={"color": "darkorange", "width": 2.4},
+        ))
+
+        _mu = float(np.mean(vh_dx))
+        _sigma = float(np.std(vh_dx, ddof=0))
+        if np.isfinite(_sigma) and _sigma > 0:
+            _gauss = (1.0 / (np.sqrt(2.0 * np.pi) * _sigma)) * np.exp(
+                -0.5 * ((_centers - _mu) / _sigma) ** 2
+            )
+            _fig_vh.add_trace(go.Scatter(
+                x=_centers, y=_gauss, mode="lines",
+                name="Gaussian match",
+                line={"color": "teal", "width": 2.0, "dash": "dash"},
+            ))
+    else:
+        _fig_vh.add_annotation(
+            text="Insufficient jumps for Van Hove at current frame/lag.",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False,
+        )
+
+    _fig_vh.update_layout(
+        title=f"Van Hove from simulation — lag={vh_lag_steps} frame(s)",
+        xaxis_title="Delta x", yaxis_title="PDF",
+        template="plotly_white", height=360,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+        margin={"l": 55, "r": 20, "t": 55, "b": 45},
+    )
+
+    _out = mo.vstack([_fig_msd, _fig_vh])
     _out
     return
 

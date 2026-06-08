@@ -13,9 +13,7 @@ def main() -> int:
         print(f"Cannot find app file: {app_file}")
         return 1
 
-    mode = "edit" if "--edit" in sys.argv else "run"
-
-    cmd = [sys.executable, "-m", "marimo", mode, str(app_file)]
+    cmd = [sys.executable, "-m", "marimo", "run", str(app_file)]
     print("Launching:", " ".join(cmd))
     return subprocess.call(cmd, cwd=str(this_dir))
 
