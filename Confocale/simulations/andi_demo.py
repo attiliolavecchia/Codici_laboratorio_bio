@@ -84,7 +84,7 @@ def _(mo):
     d_free     = mo.ui.slider(0.05, 2.0, value=0.5, step=0.05, label="D free")
     d_conf     = mo.ui.slider(0.01, 1.5, value=0.1, step=0.01, label="D confined")
     a_free     = mo.ui.slider(0.5, 2.0, value=1.0,  step=0.05, label="α free")
-    a_conf     = mo.ui.slider(0.5, 2.0, value=0.9,  step=0.05, label="α confined")
+    a_conf     = mo.ui.slider(0.2, 2.0, value=0.8,  step=0.05, label="α confined")
     alpha_fbm  = mo.ui.slider(0.5, 1.5, value=0.85, step=0.05, label="α  (FBM)")
     alpha_ctrw = mo.ui.slider(0.1, 1.0, value=0.7,  step=0.05, label="α  (CTRW)")
     alpha_lw   = mo.ui.slider(1.0, 2.0, value=1.3,  step=0.05, label="α  (Lévy Walk)")
