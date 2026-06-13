@@ -79,7 +79,7 @@ def _(mo):
     # All model-specific sliders live here so they are always defined
     # (Marimo requires every variable to exist in exactly one cell)
     r_comp     = mo.ui.slider(2, 20,  value=8,    step=1,    label="Compartment radius r (px)")
-    n_comp     = mo.ui.slider(5, 200, value=60,   step=5,    label="Number of compartments Nc", show_value=True)
+    n_comp     = mo.ui.slider(5, 250, value=60,   step=5,    label="Number of compartments Nc", show_value=True)
     trans      = mo.ui.slider(0.0, 1.0, value=0.4, step=0.05, label="Transition probability p")
     d_free     = mo.ui.slider(0.05, 2.0, value=0.5, step=0.05, label="D free")
     d_conf     = mo.ui.slider(0.01, 1.5, value=0.1, step=0.01, label="D confined")
@@ -109,6 +109,14 @@ def _(mo):
     return get_frame, set_frame
 
 
+@app.cell
+def _(mo):
+    # Incrementing this token forces the simulation cell to regenerate trajectories.
+    get_reset_token, set_reset_token = mo.state(0)
+    get_reset_seen, set_reset_seen = mo.state(0)
+    return get_reset_seen, get_reset_token, set_reset_seen, set_reset_token
+
+
 # ── PLAY CONTROLS ────────────────────────────────────────────────────────────
 @app.cell
 def _(mo):
@@ -118,14 +126,38 @@ def _(mo):
         default_interval="0.2s",
         label="Playback speed",
     )
-    return frame_tick, is_playing
+    reset_state_btn = mo.ui.button(
+        value=0,
+        on_click=lambda value: int(value) + 1,
+        label="↺ Reset state",
+    )
+    return frame_tick, is_playing, reset_state_btn
+
+
+@app.cell
+def _(
+    get_reset_seen,
+    get_reset_token,
+    reset_state_btn,
+    set_frame,
+    set_reset_seen,
+    set_reset_token,
+):
+    _clicks = int(reset_state_btn.value)
+    if _clicks > get_reset_seen():
+        set_frame(1)
+        set_reset_token(get_reset_token() + 1)
+        set_reset_seen(_clicks)
+    return
 
 
 # ── SEEK SLIDER — manual seeking; on_change writes to state ──────────────────
 @app.cell
-def _(mo, set_frame):
+def _(get_frame, mo, n_frames, set_frame):
+    _t = max(1, int(n_frames.value))
+    _v = min(max(1, int(get_frame())), _t)
     seek_slider = mo.ui.slider(
-        1, 1500, value=1, step=1,
+        1, _t, value=_v, step=1,
         label="⏩ Seek frame",
         show_value=True, full_width=True,
         on_change=set_frame,
@@ -146,13 +178,24 @@ def _(T, frame_tick, get_frame, is_playing, set_frame):
     return
 
 
+@app.cell
+def _(T, get_frame, set_frame):
+    # Keep frame state valid when T changes (e.g., user changes simulated frames).
+    _cur = int(get_frame())
+    if _cur < 1:
+        set_frame(1)
+    elif _cur > int(T):
+        set_frame(int(T))
+    return
+
+
 # ── DISPLAY ALL CONTROLS ─────────────────────────────────────────────────────
 @app.cell
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
     box_size, d_conf, d_free, d_scale,
     d_trap, is_playing, max_lag_frac, model, mo, n_comp, n_frames, n_traj,
-    frame_tick,
+    frame_tick, reset_state_btn,
     r_comp, seek_slider, trans, trap_r, trap_nt, trap_pu, trap_pb, vh_bins, vh_lag_frac,
 ):
     _info = {
@@ -201,13 +244,13 @@ def _(
             mo.md("### 🔬 Model"),
             model,
             _info[model.value],
-            mo.md("##### Common"),
+            mo.md("##### **Common**"),
             n_traj, n_frames, box_size, max_lag_frac,
-            mo.md("##### Model parameters"),
+            mo.md("##### **Model parameters**"),
             _specific,
             mo.md("---"),
             mo.md("### ⏱ Frame control"),
-            mo.hstack([is_playing, frame_tick], gap=0.5),
+            mo.hstack([is_playing, frame_tick, reset_state_btn], gap=0.5),
             seek_slider,
             mo.md("### 📊 Van Hove"),
             vh_lag_frac,
@@ -222,15 +265,18 @@ def _(
 def _(
     a_conf, a_free, alpha_ctrw, alpha_fbm, alpha_lw,
     box_size, d_conf, d_free, d_scale, d_trap, datasets_theory,
+    get_reset_token,
     model, models_phenom,
     n_comp, n_frames, n_traj, np, r_comp, trans,
     trap_r, trap_nt, trap_pu, trap_pb,
 ):
+    _ = get_reset_token()
     N = int(n_traj.value)
     T = int(n_frames.value)
     L = int(box_size.value)
     comp_centers = None
     comp_radius  = None
+    trap_positions = None
     is_bounded   = False   # True for models confined in [0, L]
 
     if model.value == "confinement":
@@ -250,6 +296,7 @@ def _(
         traj_nt2 = _traj_tn2.transpose(1, 0, 2)
     elif model.value == "traps":
         is_bounded = True
+        trap_positions = np.random.rand(int(trap_nt.value), 2) * L
         _traj_tn2, _labels = models_phenom().immobile_traps(
             N=N, T=T, L=L,
             r=int(trap_r.value),
@@ -258,6 +305,7 @@ def _(
             Ds=[float(d_trap.value), 0.0],
             alphas=[1.0, 0.0],
             Nt=int(trap_nt.value),
+            traps_pos=trap_positions,
         )
         traj_nt2 = np.array(_traj_tn2).transpose(1, 0, 2)
     else:
@@ -276,7 +324,7 @@ def _(
 
     return (
         L, N, T,
-        comp_centers, comp_radius, is_bounded,
+        comp_centers, comp_radius, trap_positions, is_bounded,
         traj_nt2,
     )
 
@@ -353,7 +401,7 @@ def _(T, get_frame, max_lag_frac, msd_analysis, np, traj_nt2, vh_lag_frac):
 @app.cell
 def _(
     L, N, T,
-    comp_centers, comp_radius, is_bounded,
+    comp_centers, comp_radius, is_bounded, trap_positions,
     get_frame, go, model, np, traj_nt2,
 ):
     _frame = min(int(get_frame()), T)
@@ -391,6 +439,20 @@ def _(
                 line={"color": "rgba(25,85,160,0.3)", "width": 1},
             )
         _xr, _yr = [0, L], [0, L]
+    elif model.value == "traps" and trap_positions is not None:
+        _fig.add_trace(go.Scatter(
+            x=trap_positions[:, 0],
+            y=trap_positions[:, 1],
+            mode="markers",
+            marker={
+                "symbol": "x",
+                "size": 7,
+                "color": "rgba(30,30,30,0.55)",
+            },
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        _xr, _yr = [0, L], [0, L]
     elif is_bounded:
         _xr, _yr = [0, L], [0, L]
     else:
@@ -403,14 +465,27 @@ def _(
         _xr = [_xmin - _px, _xmax + _px]
         _yr = [_ymin - _py, _ymax + _py]
 
+    _tfont = {"family": "Arial, Helvetica, sans-serif", "color": "#1a1a2e"}
     _fig.update_layout(
-        title=f"{model.value.upper()} | frame {_frame}/{T}",
+        title={
+            "text": f"{model.value.upper()} | frame {_frame}/{T}",
+            "font": {**_tfont, "size": 15},
+        },
         xaxis_title="x (px)", yaxis_title="y (px)",
         template="plotly_white", height=520,
-        margin={"l": 40, "r": 10, "t": 50, "b": 40},
+        margin={"l": 40, "r": 10, "t": 58, "b": 40},
+        font=_tfont,
     )
-    _fig.update_xaxes(range=_xr)
-    _fig.update_yaxes(range=_yr, scaleanchor="x", scaleratio=1)
+    _fig.update_xaxes(
+        range=_xr,
+        title_font={**_tfont, "size": 13}, tickfont={**_tfont, "size": 11},
+        linecolor="#64748b", gridcolor="#e2e8f0",
+    )
+    _fig.update_yaxes(
+        range=_yr, scaleanchor="x", scaleratio=1,
+        title_font={**_tfont, "size": 13}, tickfont={**_tfont, "size": 11},
+        linecolor="#64748b", gridcolor="#e2e8f0",
+    )
 
     _fig
     return
@@ -427,13 +502,6 @@ def _(
     # ── Figure 1: taMSD & eaMSD ──────────────────────────────────────────────
     _fig_msd = go.Figure()
 
-    for _i in range(min(tamsd.shape[1], 20)):
-        _fig_msd.add_trace(go.Scatter(
-            x=t_lags, y=tamsd[:, _i], mode="lines",
-            line={"color": "rgba(150,150,220,0.18)", "width": 1},
-            showlegend=False,
-        ))
-
     _fig_msd.add_trace(go.Scatter(
         x=t_lags, y=tamsd_mean, mode="lines",
         name=f"taMSD   α = {alpha_ta:.2f} ± {alpha_ta_std:.2f}",
@@ -445,13 +513,30 @@ def _(
         line={"color": "tomato", "width": 3},
     ))
 
-    _fig_msd.update_xaxes(title_text="Lag Δ (frames)", tickformat="d", nticks=10)
-    _fig_msd.update_yaxes(type="log", title_text="MSD", exponentformat="power", dtick=1)
+    _font = {"family": "Arial, Helvetica, sans-serif", "color": "#1a1a2e"}
+    _fig_msd.update_xaxes(
+        type="log", title_text="Lag Δ (frames)", exponentformat="power", dtick=1,
+        title_font={**_font, "size": 13}, tickfont={**_font, "size": 11},
+        linecolor="#64748b", gridcolor="#e2e8f0",
+    )
+    _fig_msd.update_yaxes(
+        type="log", title_text="MSD", exponentformat="power", dtick=1,
+        title_font={**_font, "size": 13}, tickfont={**_font, "size": 11},
+        linecolor="#64748b", gridcolor="#e2e8f0",
+    )
     _fig_msd.update_layout(
-        title=f"taMSD & eaMSD — {model.value.upper()}",
-        template="plotly_white", height=400,
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
-        margin={"l": 55, "r": 20, "t": 60, "b": 45},
+        title={
+            "text": f"taMSD & eaMSD — {model.value.upper()}",
+            "font": {**_font, "size": 15},
+            "pad": {"b": 24},
+        },
+        template="plotly_white", height=420,
+        legend={
+            "orientation": "h", "yanchor": "top", "y": 1.02,
+            "font": {**_font, "size": 11},
+        },
+        margin={"l": 60, "r": 20, "t": 110, "b": 50},
+        font=_font,
     )
 
     # Ergodicity Breaking figure is temporarily disabled.
@@ -493,7 +578,7 @@ def _(
 
         _fig_vh.add_trace(go.Scatter(
             x=_centers, y=_hist, mode="lines",
-            name="Gs(Delta x, tau)",
+            name="G<sub>s</sub>(Δx, τ)",
             line={"color": "darkorange", "width": 2.4},
         ))
 
@@ -508,6 +593,21 @@ def _(
                 name="Gaussian match",
                 line={"color": "teal", "width": 2.0, "dash": "dash"},
             ))
+
+        # Non-Gaussian parameter β = <r⁴> / (2·<r²>²) - 1
+        _beta_str = f"{vh_beta:.3g}" if np.isfinite(vh_beta) else "n/a"
+        _fig_vh.add_annotation(
+            text=f"β = {_beta_str}",
+            xref="paper", yref="paper",
+            x=0.97, y=0.97,
+            xanchor="right", yanchor="top",
+            showarrow=False,
+            font={"family": "Arial, Helvetica, sans-serif", "size": 12, "color": "#1a1a2e"},
+            bgcolor="rgba(255,255,255,0.92)",
+            bordercolor="#94a3b8",
+            borderwidth=1,
+            borderpad=7,
+        )
     else:
         _fig_vh.add_annotation(
             text="Insufficient jumps for Van Hove at current frame/lag.",
@@ -515,12 +615,29 @@ def _(
             showarrow=False,
         )
 
+    _fig_vh.update_xaxes(
+        title_text="Δx",
+        title_font={**_font, "size": 13}, tickfont={**_font, "size": 11},
+        linecolor="#64748b", gridcolor="#e2e8f0",
+    )
+    _fig_vh.update_yaxes(
+        title_text="PDF",
+        title_font={**_font, "size": 13}, tickfont={**_font, "size": 11},
+        linecolor="#64748b", gridcolor="#e2e8f0",
+    )
     _fig_vh.update_layout(
-        title=f"Van Hove from simulation — lag={vh_lag_steps} frame(s)",
-        xaxis_title="Delta x", yaxis_title="PDF",
-        template="plotly_white", height=360,
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
-        margin={"l": 55, "r": 20, "t": 55, "b": 45},
+        title={
+            "text": f"Van Hove — lag = {vh_lag_steps} frame(s)",
+            "font": {**_font, "size": 15},
+            "pad": {"b": 24},
+        },
+        template="plotly_white", height=390,
+        legend={
+            "orientation": "h", "yanchor": "top", "y": 1.02,
+            "font": {**_font, "size": 11},
+        },
+        margin={"l": 60, "r": 20, "t": 110, "b": 50},
+        font=_font,
     )
 
     _out = mo.vstack([_fig_msd, _fig_vh])
